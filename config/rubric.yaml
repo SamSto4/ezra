@@ -1,0 +1,118 @@
+# Quality Rubric (D-001, D-003, D-014).
+# Guardian's scoring instrument for Tier 3 reviews and, from Phase 6, Model Evals.
+# Changing anything here is a D-009 Level 1 decision: bump `version` and log it in docs/decisions.md.
+# Every grade records the version that produced it; per-category scores are stored, so old
+# grades can be re-scored under a newer version.
+version: "1"
+date: 2026-11-20
+
+# General 1-5 scale (spec §4.1). Guardian scores against this wording, not impressions.
+scale:
+  1: "Unacceptable: fundamentally incorrect, incomplete or unusable."
+  2: "Poor: significant deficiencies prevent reliable use."
+  3: "Acceptable: meets basic requirements but has noticeable weaknesses."
+  4: "Strong: correct, complete, useful and well executed."
+  5: "Excellent: exceptional execution with outstanding practical value."
+
+# Weights must sum to 1.0. v1 moved 5 points from Context to Reasoning (D-014):
+# Context has little to judge until Standards exist (Phase 3); revisit D then.
+# `measures` sharpens the scale for that category; `excludes` keeps categories from
+# double-counting the same flaw.
+categories:
+  A_accuracy:
+    name: Accuracy and factual integrity
+    weight: 0.20
+    core: true
+    measures: "Are the claims true? Facts, numbers, code behaviour and cited sources are correct; nothing is invented; assumptions and unknowns are labelled."
+    excludes: "Whether the overall approach was a good one (that is E)."
+  B_instruction_adherence:
+    name: Instruction adherence
+    weight: 0.20
+    core: true
+    measures: "Was the actual request delivered: every requested deliverable, explicit constraints, the requested format and scope, earlier decisions preserved?"
+    excludes: "Whether it solved the underlying problem (that is C)."
+  C_task_achievement:
+    name: Task achievement and usefulness
+    weight: 0.20
+    core: true
+    measures: "Does it accomplish the user's real objective and can it be used as is? Length and polish are not usefulness."
+    excludes: "Literal compliance with the wording (that is B)."
+  D_context_awareness:
+    name: Context awareness
+    weight: 0.10
+    core: false
+    measures: "Uses the context it was given, stays consistent with established decisions and Standards, doesn't re-ask for known information."
+    excludes: "Errors of fact (that is A)."
+  E_reasoning:
+    name: Reasoning and problem-solving
+    weight: 0.20
+    core: false
+    measures: "Is the approach sound? Right problem identified, coherent steps, trade-offs and limits recognised, recommendations backed by evidence."
+    excludes: "Whether individual claims are true (that is A)."
+  F_clarity:
+    name: Clarity and communication
+    weight: 0.05
+    core: false
+    measures: "Readable, precise, well organised, no needless repetition."
+    excludes: "Formatting and tone (that is G)."
+  G_presentation:
+    name: Professional quality and presentation
+    weight: 0.05
+    core: false
+    measures: "Appropriate tone and formatting, consistent terminology, ready to use."
+    excludes: "Content quality (A to E)."
+
+# D-003 gates. Pass/fail comes from these, never from the weighted score.
+#   fail:        any critical failure, or any core category <= core_fail_max
+#   conditional: a core category below core_pass_min, or any other category below other_pass_min
+#   pass:        otherwise
+#   excellent:   pass and weighted score >= excellent_min_score (informational only)
+gates:
+  core_fail_max: 2
+  core_pass_min: 4
+  other_pass_min: 3
+  excellent_min_score: 90
+
+# Automatic-fail conditions (spec §5). Any one fails the output whatever the scores.
+# Guardian judges materiality: not every small slip is critical.
+critical_failures:
+  fabrication: "Material fabrication of facts, citations or sources."
+  critical_instruction_violated: "Material violation of an explicit critical user instruction."
+  core_deliverable_missing: "A required core component was not delivered."
+  contradicts_project_decisions: "Material contradiction of established architecture or project decisions."
+  unsafe_action: "Unauthorised or unsafe action."
+  misleading_conclusion: "A materially misleading conclusion presented as established fact."
+
+# Agent-specific checks (D-005 table), yes/no per check. A failed or unverifiable check
+# becomes a Finding at its severity and goes through the D-002 verdict table; it is NOT
+# mixed into the 7-category score, so scores stay comparable across agents.
+# Source: system_defined; wording and severities approved by the user 2026-11-20 (D-014).
+agent_checks:
+  ezra:
+    - {id: EZR-1, severity: major, check: "Was the user's intent identified correctly, including what they left unsaid?"}
+    - {id: EZR-2, severity: major, check: "Was the request routed to the right department (or answered directly when that was enough)?"}
+    - {id: EZR-3, severity: minor, check: "Was only relevant context passed on, without missing anything the department needed?"}
+  code_joe:
+    - {id: CJ-1, severity: major, check: "Does the plan cover every Acceptance Criterion with concrete steps?"}
+    - {id: CJ-2, severity: major, check: "Is the interface spec complete and consistent, so Builder and Tester can work from it independently?"}
+    - {id: CJ-3, severity: major, check: "Were adjudications (code wrong vs test wrong) justified by the test evidence?"}
+  builder:
+    - {id: BLD-1, severity: critical, check: "Does the code do what the criteria require (correct behaviour, not just passing tests)?"}
+    - {id: BLD-2, severity: major, check: "Did it stay within the plan and interface spec, without unrequested changes?"}
+    - {id: BLD-3, severity: major, check: "Does the changed-files report match the actual diff exactly?"}
+  tester:
+    - {id: TST-1, severity: major, check: "Does every test-verified criterion have at least one test that would fail if the criterion were broken?"}
+    - {id: TST-2, severity: major, check: "Do the tests probe edge cases and likely defects, not only the happy path?"}
+    - {id: TST-3, severity: minor, check: "Are the tests deterministic and reproducible (no timing, network or order dependence)?"}
+  artifact_creator:
+    - {id: ART-1, severity: critical, check: "Was the action performed exactly as approved (right target, recipients, content)?"}
+    - {id: ART-2, severity: major, check: "Is the receipt complete enough to verify the result independently (resource id, location, timestamp)?"}
+    - {id: ART-3, severity: critical, check: "Did it stay within its permissions and the D-009 approval level?"}
+  guardian:
+    - {id: GRD-1, severity: critical, check: "No false approval: nothing passed with an unmet critical or major criterion."}
+    - {id: GRD-2, severity: major, check: "Is every judgement backed by cited evidence rather than the department's own claims?"}
+    - {id: GRD-3, severity: major, check: "Did the verdict follow the D-002 table and the D-004 limits?"}
+  learner:
+    - {id: LRN-1, severity: major, check: "Is every claimed pattern supported by the logged interactions it cites?"}
+    - {id: LRN-2, severity: critical, check: "Are inferred preferences clearly separated from ones the user stated?"}
+    - {id: LRN-3, severity: minor, check: "Is the evidence for each proposal sufficient in size and recency?"}

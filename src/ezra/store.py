@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from ezra.contracts import (
+    ApprovalRecord,
+    ApprovalStatus,
     GuardianReview,
     ModelInvocation,
     StandardDepartmentResult,
@@ -75,11 +77,22 @@ CREATE TABLE IF NOT EXISTS events (
     data        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id);
+CREATE TABLE IF NOT EXISTS approval_records (
+    approval_id TEXT PRIMARY KEY,
+    task_id     TEXT,
+    level       INTEGER NOT NULL,
+    kind        TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    record      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_approvals_status ON approval_records(status);
 """
 
 
 def _ts(dt: datetime | None = None) -> str:
-    return (dt or utcnow()).isoformat()
+    # Fixed-width UTC text, so string comparison in SQL matches time order.
+    return (dt or utcnow()).astimezone(UTC).isoformat(timespec="microseconds")
 
 
 class Store:
@@ -208,6 +221,46 @@ class Store:
 
     def events_for_task(self, task_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
-            "SELECT created_at, kind, data FROM events WHERE task_id=? ORDER BY id", (task_id,)
+            "SELECT created_at, kind, data FROM events WHERE task_id IS ? ORDER BY id", (task_id,)
         ).fetchall()
         return [{"at": r["created_at"], "kind": r["kind"], **json.loads(r["data"])} for r in rows]
+
+    # -- approval records (D-009, D-011) -------------------------------------
+
+    def create_approval(self, rec: ApprovalRecord) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT INTO approval_records VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (rec.approval_id, rec.task_id, rec.level, rec.kind, rec.status,
+                 _ts(rec.created_at), rec.model_dump_json()),
+            )
+
+    def get_approval(self, approval_id: str) -> ApprovalRecord | None:
+        row = self.conn.execute(
+            "SELECT record FROM approval_records WHERE approval_id=?", (approval_id,)
+        ).fetchone()
+        return ApprovalRecord.model_validate_json(row["record"]) if row else None
+
+    def pending_approvals(self) -> list[ApprovalRecord]:
+        rows = self.conn.execute(
+            "SELECT record FROM approval_records WHERE status=? ORDER BY created_at",
+            (ApprovalStatus.PENDING,),
+        ).fetchall()
+        return [ApprovalRecord.model_validate_json(r["record"]) for r in rows]
+
+    def resolve_approval(self, approval_id: str, approved: bool,
+                         response: str | None = None) -> ApprovalRecord:
+        rec = self.get_approval(approval_id)
+        if rec is None:
+            raise KeyError(f"No approval '{approval_id}'")
+        if rec.status is not ApprovalStatus.PENDING:
+            raise ValueError(f"Approval '{approval_id}' is already {rec.status}")
+        rec = rec.model_copy(update={
+            "status": ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED,
+            "response": response, "resolved_at": utcnow()})
+        with self.conn:
+            self.conn.execute(
+                "UPDATE approval_records SET status=?, record=? WHERE approval_id=?",
+                (rec.status, rec.model_dump_json(), approval_id),
+            )
+        return rec

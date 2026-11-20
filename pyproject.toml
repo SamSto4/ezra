@@ -11,6 +11,9 @@ dependencies = [
     "pyyaml>=6.0",
 ]
 
+[project.scripts]
+ezra = "ezra.cli:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
 

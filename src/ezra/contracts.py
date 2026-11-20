@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -335,7 +335,8 @@ class ModelInvocation(_Model):
     department: Department
     operation_type: str
     provider: str = "anthropic"
-    model_id: str
+    model_id: str  # the model that served the call (differs from requested on fallback)
+    requested_model: str | None = None
     model_version: str = ""
     routing_policy_version: str = "phase1-static"
     input_tokens: int = 0
@@ -349,4 +350,32 @@ class ModelInvocation(_Model):
     escalation: bool = False
     correction_cycle_used: bool = False
     failure_reason: str | None = None
+    fallback_used: bool = False
+    stop_reason: str | None = None
+    request_id: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
+
+
+# ---------------------------------------------------------------------------
+# Approval records (D-009). A HOLD is a stored, pending record (D-011), so any
+# client (CLI now, UI later) can list and answer it.
+# ---------------------------------------------------------------------------
+
+
+class ApprovalStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
+class ApprovalRecord(_Model):
+    approval_id: str = Field(default_factory=lambda: new_id("apr"))
+    task_id: str | None
+    level: int = Field(ge=1, le=4)  # D-009 level
+    kind: str  # e.g. "budget_hold"
+    summary: str
+    details: dict[str, Any] = Field(default_factory=dict)
+    status: ApprovalStatus = ApprovalStatus.PENDING
+    response: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    resolved_at: datetime | None = None

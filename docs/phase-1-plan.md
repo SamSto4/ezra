@@ -2,7 +2,7 @@
 
 **Goal:** one real coding request flows end to end: **User → Ezra → Code Joe (Builder + Tester) → Guardian → User**. Every model call is logged, and every step lands in a trace we can read in Phase 2.
 **Governed by:** [decisions.md](decisions.md) (D-001 to D-010).
-**Status:** Plan, awaiting approval. Nothing is built yet.
+**Status:** Approved. M1 and M2 are done; see section 9.
 
 ---
 
@@ -195,5 +195,28 @@ The steps are ordered so everything that needs **no API access** comes first. We
 **Carried into M4:**
 - Before submitting, Code Joe checks that every test-verified criterion has an acceptance test. Otherwise a missing test would REVISE back to Builder, who can't write tests, and the task would always ESCALATE.
 - Worktrees live under Ezra's folder, so the sandboxed pytest and ruff runs must pass the target repo's root and config explicitly. Otherwise they could pick up Ezra's own `pyproject.toml`.
-- The installed SDK is `anthropic` 2.11. Check the Python SDK docs against that version before writing the Gateway (M2).
+- Builder and Tester will run in parallel and share one SQLite connection. Use one connection per thread, and make the budget check and the spend atomic. Otherwise two calls can both pass the check and together overspend.
+- Answering a HOLD (approve or reject, then resume) is built with the LangGraph interrupt in M4. In M2 a HOLD only stops the call and stores a pending approval.
+
+**M2, done (2026-11-20).** The Gateway (`gateway.py`), prices (`config/pricing.yaml` and `pricing.py`), a core module (`core.py`) and a thin CLI (`ezra ask`, `ezra approvals`). 100 tests pass and ruff is clean.
+- **Live check:** `ezra ask "what's 2+2"` answered "2 + 2 = 4" on Sonnet 5.5. The logged row shows 55 input tokens, 11 output tokens and $0.000220, which matches a hand calculation. Cache read was 0, as expected, because the prompt is under the 512-token caching minimum.
+- **Forced HOLD:** with a $0.001 budget on a throwaway database, the call stopped before reaching the model, and a pending Level 1 `budget_hold` approval was stored.
+- **Probed before building:** the request shape (adaptive thinking, effort, `fallbacks: "default"` under `server-side-fallback-2026-07-01`, streaming) is accepted by both Sonnet 5.5 and Opus 5.5. Fallback targets are Sonnet 5.5 → Sonnet 5, and Opus 5.5 → Opus 4.8 or Opus 5.
+- **Cost rules:**
+  - Each attempt in `usage.iterations` is priced at its own model.
+  - A model with no price is never counted as $0; the budget falls back to the worst-case estimate.
+  - The worst case prices input at the cache-write rate and the full `max_tokens` at the most expensive model the call could land on.
+  - A call without a task is capped at the per-task budget.
+- **D-011 rules in place:**
+  - Every call writes `model_call_started` and `model_call_finished` events.
+  - A HOLD is stored in `approval_records`.
+  - The CLI only prints; the logic lives in `core.py`.
+- **Failure handling:**
+  - Missing credentials give a clear message, not a traceback.
+  - A call the API rejected (4xx/5xx) is booked at $0.
+  - Timeouts and dropped connections keep the worst-case estimate as spend.
+- **Proven only against fakes so far:**
+  - Fallback pricing and non-zero cache accounting. Hand-check the first real call that shows a fallback or a cache read.
+  - Live attempts arrive without a `model` field, so a declined attempt may be priced at the served model.
+- **Known gap until M4:** a HOLD can't be answered yet, and each repeated `ezra ask` over the limit adds another pending row.
 

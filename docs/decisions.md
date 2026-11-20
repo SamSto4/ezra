@@ -17,6 +17,7 @@ Status values: **Accepted** (decided by the user) · **Proposed** (recommended, 
 | D-008 | Build order flipped: slice → traces → standards | Accepted |
 | D-009 | Which decisions come back to the user, by importance | Accepted |
 | D-010 | Runtime and scope: local Python, Claude-only, Learner logs Ezra only | Accepted |
+| D-011 | User interface: build UI v1 at the start of Phase 2; Phase 1 keeps the core UI-ready | Accepted |
 
 ---
 
@@ -228,8 +229,18 @@ Rules for the matrix itself:
 | Interface for the slice | Command line (`ezra "…"` plus an interactive chat mode). A web or voice interface can come later on top of the same core. | Accepted |
 | Database for the slice | **SQLite** (one local file, no server, and LangGraph has a SQLite checkpointer). Move to Postgres only if a real need appears. | Accepted |
 
+---
+
+## D-011 — User interface  *(Accepted)*
+
+Full plan: [ui/ui-plan.md](ui/ui-plan.md). Reference design: the user's mockup, kept locally in `docs/ui/private/` (not published).
+
+- **When:** UI v1 is built at the start of Phase 2, as the tool for reading traces. Before that, Phase 1 stays CLI-only (D-010).
+- **What:** the mockup's look, with its content swapped for Ezra's real functions. It adds an approvals inbox, a spend meter and a trace viewer, and shows each department's panel only once that department exists.
+- **Phase 1 rules:** the CLI is a thin client over a core module, every graph step writes structured start and finish events, and HOLDs are stored as pending approval records.
+- **Database:** SQLite stays while the UI runs on localhost. If Ezra needs to be reachable from other devices (phone, a hosted UI), revisit hosted Postgres (for example Supabase). `store.py` is the only file that would change, and LangGraph has a Postgres checkpointer.
+
 ## Still open
 
 - Where the Claude routing dataset files (`routing_policy.json`, `task_routing.csv`, …) are. They're needed in Phase 6, not before.
 - Eval environment, re-eval frequency, eval budget limits (Phase 6).
-- Database choice, eval environment, re-eval frequency, eval budget limits.

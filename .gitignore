@@ -1,0 +1,11 @@
+# Runtime data (D-010: local SQLite, worktrees)
+.ezra/
+# Code Joe's demo target is its own git repo
+playground/
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/

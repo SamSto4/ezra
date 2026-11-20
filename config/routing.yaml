@@ -1,0 +1,10 @@
+# Phase 1 static routing (docs/phase-1-plan.md §3).
+# Replaced by the benchmark-driven Model Router in Phase 6.
+version: phase1-static
+operations:
+  ezra.intake:        {model: claude-sonnet-5-5, effort: medium}
+  code_joe.plan:      {model: claude-opus-5-5,   effort: medium}
+  code_joe.adjudicate: {model: claude-opus-5-5,  effort: low}
+  builder.implement:  {model: claude-sonnet-5-5, effort: medium}
+  tester.write_tests: {model: claude-sonnet-5-5, effort: medium}
+  guardian.tier2:     {model: claude-opus-5-5,   effort: low}

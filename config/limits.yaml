@@ -1,0 +1,9 @@
+# Loop caps (D-004) and spending limits (D-009 Level 1).
+# Lowering a limit is fine at any time; raising one is a user decision.
+max_infra_retries: 2
+internal_iteration_cap: 2
+internal_iteration_cap_after_revise: 1
+correction_cycle_limit: 1
+task_budget_usd: 2.0
+daily_budget_usd: 10.0
+test_timeout_seconds: 120

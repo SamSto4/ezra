@@ -12,6 +12,8 @@ from ezra.contracts import Limits
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = PROJECT_ROOT / "config"
 DATA_DIR = PROJECT_ROOT / ".ezra"
+# Phase 1: Code Joe works only on the playground repo (docs/phase-1-plan.md §6).
+PLAYGROUND_DIR = PROJECT_ROOT / "playground"
 
 
 class OperationRoute(BaseModel):

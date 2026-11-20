@@ -2,7 +2,7 @@
 
 **Goal:** one real coding request flows end to end: **User → Ezra → Code Joe (Builder + Tester) → Guardian → User**. Every model call is logged, and every step lands in a trace we can read in Phase 2.
 **Governed by:** [decisions.md](decisions.md) (D-001 to D-010).
-**Status:** Approved. M1 and M2 are done; see section 9.
+**Status:** Approved. M1–M3 are done; see section 9.
 
 ---
 
@@ -219,4 +219,33 @@ The steps are ordered so everything that needs **no API access** comes first. We
   - Fallback pricing and non-zero cache accounting. Hand-check the first real call that shows a fallback or a cache read.
   - Live attempts arrive without a `model` field, so a declined attempt may be priced at the served model.
 - **Known gap until M4:** a HOLD can't be answered yet, and each repeated `ezra ask` over the limit adds another pending row.
+
+**M3, done (2026-11-20).** Ezra intake (`intake.py`): one structured-output call routes each request as `direct`, `code` or `unsupported`. 117 tests pass and ruff is clean.
+- **Code route:** writes 2–8 typed Acceptance Criteria (ids AC1… in order, at least one critical, `check` set exactly on deterministic criteria) and saves a TaskEnvelope for Code Joe with status `created`, targeting `playground/`.
+- **Validation:** the schema forces the response's shape, and `problems_with()` checks the rules a schema can't express. A broken response gets one repair, which explains the problems back to the model, then fails clearly. Truncated output fails without a repair.
+- **Costing:** every request gets an id up front, so the intake call is billed to the task it creates. Cost per task includes intake.
+- **Caching:** the system prompt is static. The project summary (tracked files plus public signatures) and the request go in the user message, after the cached prefix.
+- **CLI:** `ezra ask` prints the answer, the new task with its criteria, or the reason a request isn't supported. `ezra task <id>` shows a saved task.
+- **Live checks** (back to back, on Sonnet 5.5):
+
+  | Request | Route | Result | Cost |
+  |---|---|---|---|
+  | "what's 2+2" | direct | Answered | $0.0053 (wrote the 1,755-token prefix to the cache) |
+  | "Add a sentence_count function to textkit…" | code | Task saved with 7 criteria: 2 critical, 4 major tests, 1 `tests_pass` | $0.0075 (read the prefix from the cache) |
+  | "Email my team…" | unsupported | Explained, and offered to draft the text | $0.0016 |
+
+  The cache read was **verified live for the first time**. The costs match hand calculations.
+- **More live checks (on a throwaway database):**
+  - The repair request (the rejected intake sent back as the assistant turn, then the problems) is accepted by the API, and the repaired intake passed every rule ($0.0071).
+  - "make textkit better" routed to `direct` with one clarifying question instead of inventing criteria ($0.0019).
+- **Robustness:**
+  - The project summary handles filenames with spaces.
+  - A missing or non-git project doesn't crash: questions are still answered, and a code request fails clearly without saving a task.
+  - An empty reply fails instead of being replayed.
+- **Caching break-even, to review in Phase 2:**
+  - A cold call pays an extra 1,755 × ($2.50 − $2.00) per million tokens, about $0.0009, to write the cache.
+  - Each warm call saves 1,755 × ($2.00 − $0.10) per million, about $0.0033.
+  - So caching pays off once more than about 1 in 5 asks follows another within 5 minutes. Check that against real usage.
+- **Leftover:** `task_43299c6a98c1` (sentence_count) is a real `created` task in the local database. M4 can use it as its first task.
+- **Watch in M4/M5:** intake makes judgment calls on edge cases the user never specified. For example, "Wait... what?!" counts as 2 sentences, and text with no ending punctuation counts as 0. Guardian will hold Code Joe to those calls. If they turn out wrong in practice, consider a confirmation step for criteria intake inferred (D-009 Level 2 style).
 

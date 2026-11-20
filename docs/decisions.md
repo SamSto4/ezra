@@ -18,6 +18,7 @@ Status values: **Accepted** (decided by the user) · **Proposed** (recommended, 
 | D-009 | Which decisions come back to the user, by importance | Accepted |
 | D-010 | Runtime and scope: local Python, Claude-only, Learner logs Ezra only | Accepted |
 | D-011 | User interface: build UI v1 at the start of Phase 2; Phase 1 keeps the core UI-ready | Accepted |
+| D-012 | Learning goals: router vs no-router token experiment; observable long-term memory and patterns | Accepted |
 
 ---
 
@@ -239,6 +240,49 @@ Full plan: [ui/ui-plan.md](ui/ui-plan.md). Reference design: the user's mockup, 
 - **What:** the mockup's look, with its content swapped for Ezra's real functions. It adds an approvals inbox, a spend meter and a trace viewer, and shows each department's panel only once that department exists.
 - **Phase 1 rules:** the CLI is a thin client over a core module, every graph step writes structured start and finish events, and HOLDs are stored as pending approval records.
 - **Database:** SQLite stays while the UI runs on localhost. If Ezra needs to be reachable from other devices (phone, a hosted UI), revisit hosted Postgres (for example Supabase). `store.py` is the only file that would change, and LangGraph has a Postgres checkpointer.
+
+## D-012 — Learning goals: router experiment and observable memory  *(Accepted)*
+
+Added at the user's request (2026-11-20). Ezra is also a way to learn how agents work, so two goals are part of the roadmap.
+
+### 1. Router experiment (Phase 6)
+
+**Question:** how many tokens and dollars does a model router save, and does it cost quality?
+
+| Arm | Model choice |
+|-----|--------------|
+| A. No router, one strong model | Every operation runs on Opus 5.5 |
+| B. Static table | Today's `config/routing.yaml` (Phase 1) |
+| C. Dynamic router | The Phase 6 router picks per operation from Model Eval evidence |
+
+**Method:**
+- Run the same fixed set of tasks through each arm, at least 3 runs per task per arm, because model output varies.
+- Keep prompts, Standards and limits identical across arms. Only the model choice changes.
+- Randomize run order so prompt caching doesn't favor whichever arm runs second.
+
+**Metrics:**
+- Cost per successful task. This is the headline number.
+- Total, input, output and cached tokens.
+- First-try PASS rate, correction cycles, ESCALATE rate.
+- Latency.
+
+**Answer format:** a savings figure with its spread across runs, plus whether quality changed.
+**Cost:** the experiment's budget is set before it runs and needs your yes (D-009 Level 1).
+**Needs:** the Phase 6 router and Model Evals, and enough real tasks from Phase 2 to build the task set.
+
+### 2. Observable memory and patterns (Phases 2–4)
+
+You should be able to *see* how Ezra's memory and patterns form and change.
+- **Versioned memory:** every Standard, user-profile fact and prompt carries a version, a date, its source (provenance) and whether it was explicit or inferred. Changes are diffable.
+- **Memory timeline:** in the UI's Knowledge panel (D-011), each entry shows its history and the tasks that taught it.
+- **Pattern charts over time:**
+  - Cost per successful task.
+  - First-try PASS rate.
+  - REVISE reasons by category.
+  - Cache-read share.
+- The learning guide is [learning/memory-and-patterns.md](learning/memory-and-patterns.md).
+
+---
 
 ## Still open
 

@@ -10,3 +10,6 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 .DS_Store
+
+# Local-only assets with personal details (never published)
+docs/ui/private/

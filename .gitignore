@@ -13,3 +13,6 @@ __pycache__/
 
 # Local-only assets with personal details (never published)
 docs/ui/private/
+
+# Your actual Standards hold personal preferences (D-013); only the format is public
+standards/private/

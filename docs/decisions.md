@@ -19,6 +19,8 @@ Status values: **Accepted** (decided by the user) · **Proposed** (recommended, 
 | D-010 | Runtime and scope: local Python, Claude-only, Learner logs Ezra only | Accepted |
 | D-011 | User interface: build UI v1 at the start of Phase 2; Phase 1 keeps the core UI-ready | Accepted |
 | D-012 | Learning goals: router vs no-router token experiment; observable long-term memory and patterns | Accepted |
+| D-013 | Standard format and storage; only user-stated Standards before Phase 3 | Accepted |
+| D-014 | Quality Rubric v1: versioned config, reweighted, anchors, critical failures, agent checks | Accepted |
 
 ---
 
@@ -281,6 +283,40 @@ You should be able to *see* how Ezra's memory and patterns form and change.
   - REVISE reasons by category.
   - Cache-read share.
 - The learning guide is [learning/memory-and-patterns.md](learning/memory-and-patterns.md).
+
+---
+
+## D-013 — Standard format and storage  *(Accepted)*
+
+Decided by the user on 2026-11-20. This works inside D-008: the full Standards library still comes from Phase 2 evidence.
+
+- **Format:** one Markdown file per Standard with YAML frontmatter. The fields merge spec §4.3 with the template prompt, using D-001 terms. The template is [standards/templates/standard-template.md](../standards/templates/standard-template.md) and the rules are in [standards/README.md](../standards/README.md).
+- **Storage, split:** the format, template and README are public in `standards/`. The user's actual Standards and their changelog live in `standards/private/`, which is gitignored and stays on the user's Mac (in the main checkout, not a worktree).
+- **Before Phase 3:** only Standards the user states outright are recorded, as `source: user_confirmed`. Nothing is inferred or invented.
+- **Status:** every Standard stays `draft` until a Guardian validation record exists (D-006). Nothing loads Standards yet, so they're a record, not something Ezra enforces.
+
+---
+
+## D-014 — Quality Rubric v1  *(Accepted)*
+
+Decided by the user on 2026-11-20 (a D-009 Level 1 change to Guardian's rules). The rubric lives in [config/rubric.yaml](../config/rubric.yaml); `guardian/rubric.py` loads it.
+
+- **Versioned config.** Weights, gates, anchors, critical failures and agent checks are one versioned file. Every grade records `rubric_version`, and per-category scores are kept, so old grades can be re-scored under a later version.
+- **Weights changed: Reasoning up, Context down.**
+
+  | Category | Before | v1 |
+  |----------|--------|----|
+  | A Accuracy · B Instructions · C Task achievement | 20 each | 20 each |
+  | D Context awareness | 15 | **10** |
+  | E Reasoning | 15 | **20** |
+  | F Clarity · G Presentation | 5 each | 5 each |
+
+  Why: Context has little to judge until Standards exist (Phase 3), while reasoning drives Code Joe's plans and adjudication. Revisit D in Phase 3. Pass/fail still comes from the D-003 gates, so this changes the "excellent" label, trends and Model Eval comparisons, not which outputs pass.
+- **Gates unchanged** (D-003), now as config values. Recalibration stays in Phase 2.
+- **Anchors.** The spec's 1–5 scale, plus a `measures` and an `excludes` line per category, so one flaw isn't counted twice (A is "are the claims true", E is "is the approach sound").
+- **Critical failures.** The spec's six automatic-fail conditions are named codes; `grade()` rejects unknown codes.
+- **Agent checks** (the D-005 table, wording and severities approved by the user 2026-11-20) are yes/no checks with a severity. A failed or unverifiable check becomes a Finding that goes through the D-002 verdict table; it is not mixed into the 7-category score, so scores stay comparable across agents. They are `system_defined`; revisit with Phase 2 evidence.
+- **Token efficiency is not a rubric category.** Guardian can't see token counts and the Gateway measures them exactly. Model Evals will combine "passed the gates" with actual cost.
 
 ---
 

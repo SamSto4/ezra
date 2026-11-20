@@ -315,6 +315,7 @@ class GuardianReview(_Model):
     criteria_results: list[CriterionResult] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
     grade: QualityGrade | None = None
+    rubric_version: str | None = None  # set when a Rubric grade was given (D-014)
     verdict: Verdict
     matched_rule: int
     required_corrections: list[str] = Field(default_factory=list)

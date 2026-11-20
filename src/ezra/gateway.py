@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -87,12 +88,28 @@ class Gateway:
                     "No Claude credentials found. Set ANTHROPIC_API_KEY in ~/.zshrc "
                     "(then open a new terminal) or run `ant auth login`.")
         self.client = client
+        # Reservations: the worst case of calls that are in flight but not yet logged.
+        # Check-and-reserve happens under one lock, so two parallel calls (Builder and
+        # Tester) can't both pass the budget check and then overspend together.
+        self._lock = threading.Lock()
+        self._reserved_task: dict[str, float] = {}
+        self._reserved_day = 0.0
 
     # -- public -------------------------------------------------------------
 
     def call(self, *, operation: str, department: Department, system: str,
              messages: list[dict[str, Any]], max_tokens: int, task_id: str | None = None,
-             output_format: dict[str, Any] | None = None) -> GatewayResponse:
+             output_format: dict[str, Any] | None = None,
+             tools: list[dict[str, Any]] | None = None, cache_conversation: bool = False,
+             task_budget_usd: float | None = None, daily_budget_usd: float | None = None,
+             approval_id: str | None = None, persist_hold: bool = True) -> GatewayResponse:
+        """One model call. Optional knobs:
+        - tools: client tools for an agent loop (the caller runs them).
+        - cache_conversation: also cache the conversation so far, for loops whose history
+          grows every turn.
+        - task_budget_usd / daily_budget_usd: caps for this call (default: config/limits.yaml).
+        - approval_id / persist_hold: a HOLD's id, and whether the Gateway saves it. A graph
+          step that may rerun passes a stable id and saves the approval itself."""
         route = self.routing.route(operation)
         output_config: dict[str, Any] = {"effort": route.effort}
         if output_format is not None:
@@ -103,11 +120,27 @@ class Gateway:
         shared = dict(model=route.model, system=system_blocks, messages=messages,
                       thinking={"type": "adaptive"}, output_config=output_config,
                       betas=[FALLBACK_BETA])
+        if tools:
+            shared["tools"] = tools
+        if cache_conversation:
+            shared["cache_control"] = {"type": "ephemeral"}  # caches up to the last block
 
         input_tokens = self._count_input(shared)
         worst = self.pricing.worst_case(route.model, input_tokens=input_tokens,
                                         max_tokens=max_tokens)
-        self._check_budget(task_id=task_id, operation=operation, model=route.model, worst=worst)
+        caps = (task_budget_usd if task_budget_usd is not None else self.limits.task_budget_usd,
+                daily_budget_usd if daily_budget_usd is not None else self.limits.daily_budget_usd)
+        self._check_and_reserve(task_id=task_id, operation=operation, model=route.model,
+                                worst=worst, caps=caps, approval_id=approval_id,
+                                persist_hold=persist_hold)
+        try:
+            return self._call_reserved(shared, route, operation, department, task_id,
+                                       input_tokens, max_tokens, worst)
+        finally:
+            self._release(task_id, worst)
+
+    def _call_reserved(self, shared, route, operation, department, task_id, input_tokens,
+                       max_tokens, worst) -> GatewayResponse:
 
         self.store.log_event(task_id, "model_call_started", operation=operation,
                              department=str(department), model=route.model,
@@ -154,28 +187,57 @@ class Gateway:
             text = json.dumps([shared["system"], shared["messages"]], default=str)
             return math.ceil(len(text) / 2)
 
-    def _check_budget(self, *, task_id: str | None, operation: str, model: str,
-                      worst: float) -> None:
-        task_limit, day_limit = self.limits.task_budget_usd, self.limits.daily_budget_usd
-        spent_task = self.store.spend_for_task(task_id) if task_id else 0.0
-        spent_today = self.store.spend_since(start_of_local_day(self.now()))
+    def _check_and_reserve(self, *, task_id: str | None, operation: str, model: str,
+                           worst: float, caps: tuple[float, float], approval_id: str | None,
+                           persist_hold: bool) -> None:
+        task_limit, day_limit = caps
+        with self._lock:
+            spent_task = (self.store.spend_for_task(task_id) if task_id else 0.0) + \
+                self._reserved_task.get(task_id or "", 0.0)
+            spent_today = self.store.spend_since(start_of_local_day(self.now())) + \
+                self._reserved_day
+            breaches = self._breaches(spent_task, spent_today, worst, task_limit, day_limit)
+            if not breaches:
+                key = task_id or ""
+                self._reserved_task[key] = self._reserved_task.get(key, 0.0) + worst
+                self._reserved_day += worst
+                return
+        self._hold(task_id=task_id, operation=operation, model=model, worst=worst,
+                   breaches=breaches, spent_task=spent_task, spent_today=spent_today,
+                   caps=caps, approval_id=approval_id, persist=persist_hold)
+
+    def _release(self, task_id: str | None, worst: float) -> None:
+        with self._lock:
+            key = task_id or ""
+            self._reserved_task[key] = max(0.0, self._reserved_task.get(key, 0.0) - worst)
+            self._reserved_day = max(0.0, self._reserved_day - worst)
+
+    @staticmethod
+    def _breaches(spent_task: float, spent_today: float, worst: float, task_limit: float,
+                  day_limit: float) -> list[str]:
         breaches = []
         # Without a task the call is its own task, so the per-task limit caps the call.
         if spent_task + worst > task_limit:
             breaches.append(f"task budget ${task_limit:.2f}")
         if spent_today + worst > day_limit:
             breaches.append(f"daily budget ${day_limit:.2f}")
-        if not breaches:
-            return
+        return breaches
+
+    def _hold(self, *, task_id, operation, model, worst, breaches, spent_task, spent_today,
+              caps, approval_id, persist) -> None:
+        task_limit, day_limit = caps
         approval = ApprovalRecord(
+            **({"approval_id": approval_id} if approval_id else {}),
             task_id=task_id, level=1, kind="budget_hold",
             summary=(f"{operation} could cost up to ${worst:.4f}, which would pass the "
                      f"{' and '.join(breaches)}."),
             details=dict(operation=operation, model=model, worst_case_usd=round(worst, 6),
                          spent_task_usd=round(spent_task, 6),
                          spent_today_usd=round(spent_today, 6),
-                         task_budget_usd=task_limit, daily_budget_usd=day_limit))
-        self.store.create_approval(approval)
+                         task_budget_usd=task_limit, daily_budget_usd=day_limit,
+                         breaches=[b.split()[0] for b in breaches]))
+        if persist:
+            self.store.create_approval(approval)
         self.store.log_event(task_id, "budget_hold", approval_id=approval.approval_id,
                              operation=operation, model=model, worst_case_usd=round(worst, 6))
         raise BudgetHold(approval)

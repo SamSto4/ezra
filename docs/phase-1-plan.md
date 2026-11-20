@@ -2,7 +2,7 @@
 
 **Goal:** one real coding request flows end to end: **User → Ezra → Code Joe (Builder + Tester) → Guardian → User**. Every model call is logged, and every step lands in a trace we can read in Phase 2.
 **Governed by:** [decisions.md](decisions.md) (D-001 to D-010).
-**Status:** Approved. M1–M3 are done; see section 9.
+**Status:** Approved. M1–M4 are done; see section 9.
 
 ---
 
@@ -249,3 +249,50 @@ The steps are ordered so everything that needs **no API access** comes first. We
 - **Leftover:** `task_43299c6a98c1` (sentence_count) is a real `created` task in the local database. M4 can use it as its first task.
 - **Watch in M4/M5:** intake makes judgment calls on edge cases the user never specified. For example, "Wait... what?!" counts as 2 sentences, and text with no ending punctuation counts as 0. Guardian will hold Code Joe to those calls. If they turn out wrong in practice, consider a confirmation step for criteria intake inferred (D-009 Level 2 style).
 
+**M4, done (2026-11-20).** Code Joe runs as a LangGraph graph: setup → plan (Opus) → Builder ∥ Tester (Sonnet tool loops) → sandboxed pytest + ruff → adjudicate and iterate, or package. 135 tests pass and ruff is clean.
+
+- **Commands:**
+  - `ezra run <task_id> [--task-budget X]`: X can only lower the cap.
+  - `ezra approve <id> [--extend X]` and `ezra reject <id>`: these resume a paused task, even from a new process.
+- **Carry-overs closed:**
+  - Before packaging, every test-verified criterion must have an acceptance test named with its id. A missing one goes back to Tester by rule, with no model call.
+  - pytest and ruff get the worktree's own root and `pyproject.toml` explicitly.
+  - The store has one lock around every method, and the Gateway checks and reserves budget under one lock, so parallel calls can't overspend together.
+  - The HOLD answer path is built.
+- **Sandbox:**
+  - Environment built from an allowlist (no API key, no shell profile) with a throwaway `HOME`.
+  - The whole process group is killed on timeout, and no caches are written into the worktree.
+  - `--continue-on-collection-errors` lets one broken test file not hide the rest.
+  - Exact pytest node ids come from a reporter plugin, so Tier 1 matches the same names.
+- **Tools and roles:**
+  - File tools only (list, read, write), all through the M1 path guard.
+  - Tester can read only `tests/`. Builder can't read or write `tests/acceptance/`.
+  - Tool inputs are validated before they run.
+  - A turn cut off at the length limit never runs its tools.
+  - A model fallback mid-loop fails the agent run clearly.
+  - The loop is capped at 14 turns, and the growing conversation is cached.
+- **Pause and resume** (checked first with a free LangGraph probe):
+  - A HOLD inside a step saves a pending approval with a stable id and pauses the graph.
+  - On resume, LangGraph reruns that step from its start. The replayed pause returns the saved answer and the cap is raised. Repeating the same approval id is harmless.
+  - Counters change only through returned state.
+- **Live run 1** (`task_43299c6a98c1`, sentence_count): completed on `ezra/task_43299c6a98c1`.
+  - 8/8 tests passed and all 7 criteria were met by Tier 1.
+  - 8 model calls cost **$0.049** in total, intake included.
+  - After the first turn each worker turn sent only 2–4 new input tokens; the rest (1,400–2,000) was read from the cache.
+- **Live run 2** (`task_a2656c048f23`, char_count, cap lowered to $0.34): Builder finished in parallel while Tester paused with a HOLD. `ezra approve … --extend 1.66` from a new process resumed it.
+  - Tester ran, and Builder wasn't rerun: still 3 calls.
+  - 7/7 tests passed, with one approval row, approved.
+  - Total cost $0.045.
+- **Notes for later:**
+  - Worst-case estimates (about $0.16 per Sonnet turn and $0.31 for the plan) are 30–80× the actual cost per call. That's safe but makes HOLDs trigger early under tight caps. Consider tuning `max_tokens` per operation in Phase 2.
+  - On resume, the progress display repeats steps that finished before the pause.
+  - Neither branch is merged. Merging is D-009 Level 1 and is the user's decision.
+- **Bug found in review and fixed:**
+  - In live run 2 the pause did not repeat on resume, because Builder's reservation was already released. So the approval's answer was never read: the $1.66 extension wasn't applied, and a rejection would have been ignored.
+  - Steps now read the decision from the stored approval record when they start. A rejection stops the step before any model call. An extension raises only the cap the hold named, task or daily.
+  - New tests cover a rejection and an approval where the pause doesn't repeat, and two workers paused and answered one at a time. 135 tests pass.
+  - Run 2 proved pause and resume across processes live. The extension is proven by tests only. That HOLD was answered by Claude, back to the normal $2 cap, as part of the test.
+- **Carried into M5 (needs the user's yes, because it changes the path guard or a Guardian rule):** Builder can still write `conftest.py` or `pyproject.toml`, which can change how the frozen acceptance tests run, for example by skipping them. Options:
+  - Block those files for Builder.
+  - Have Guardian Tier 1 flag any change to them as a major finding.
+- **Carried into M6:** a crash or Ctrl-C mid-run leaves the task in `running` with its worktree, and `ezra run` then refuses it. Add `ezra run --resume`, or a cleanup command.

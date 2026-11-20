@@ -6,8 +6,10 @@ Secrets never go in here: callers pass contracts, and contracts carry no credent
 
 from __future__ import annotations
 
+import functools
 import json
 import sqlite3
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -95,12 +97,32 @@ def _ts(dt: datetime | None = None) -> str:
     return (dt or utcnow()).astimezone(UTC).isoformat(timespec="microseconds")
 
 
-class Store:
+def _locked(method):
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
+
+class _ThreadSafe(type):
+    """Wraps every public method in the store's lock. Builder and Tester run in parallel
+    threads and share one connection, so every read and write is serialized."""
+
+    def __new__(mcs, name, bases, ns):
+        for key, value in list(ns.items()):
+            if callable(value) and not key.startswith("_"):
+                ns[key] = _locked(value)
+        return super().__new__(mcs, name, bases, ns)
+
+
+class Store(metaclass=_ThreadSafe):
     def __init__(self, path: Path | str):
         self.path = Path(path)
         if str(path) != ":memory:":
             self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.conn = sqlite3.connect(str(path))
+        self._lock = threading.RLock()
+        self.conn = sqlite3.connect(str(path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
 
@@ -230,7 +252,9 @@ class Store:
     def create_approval(self, rec: ApprovalRecord) -> None:
         with self.conn:
             self.conn.execute(
-                "INSERT INTO approval_records VALUES (?, ?, ?, ?, ?, ?, ?)",
+                # OR IGNORE: a graph step that reruns after a pause re-raises the same
+                # hold with the same id; it must not create a second pending row.
+                "INSERT OR IGNORE INTO approval_records VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (rec.approval_id, rec.task_id, rec.level, rec.kind, rec.status,
                  _ts(rec.created_at), rec.model_dump_json()),
             )
@@ -248,8 +272,16 @@ class Store:
         ).fetchall()
         return [ApprovalRecord.model_validate_json(r["record"]) for r in rows]
 
+    def approvals_for_task(self, task_id: str) -> list[ApprovalRecord]:
+        rows = self.conn.execute(
+            "SELECT record FROM approval_records WHERE task_id=? ORDER BY created_at",
+            (task_id,),
+        ).fetchall()
+        return [ApprovalRecord.model_validate_json(r["record"]) for r in rows]
+
     def resolve_approval(self, approval_id: str, approved: bool,
-                         response: str | None = None) -> ApprovalRecord:
+                         response: str | None = None,
+                         extra_details: dict[str, Any] | None = None) -> ApprovalRecord:
         rec = self.get_approval(approval_id)
         if rec is None:
             raise KeyError(f"No approval '{approval_id}'")
@@ -257,7 +289,8 @@ class Store:
             raise ValueError(f"Approval '{approval_id}' is already {rec.status}")
         rec = rec.model_copy(update={
             "status": ApprovalStatus.APPROVED if approved else ApprovalStatus.REJECTED,
-            "response": response, "resolved_at": utcnow()})
+            "response": response, "resolved_at": utcnow(),
+            "details": {**rec.details, **(extra_details or {})}})
         with self.conn:
             self.conn.execute(
                 "UPDATE approval_records SET status=?, record=? WHERE approval_id=?",

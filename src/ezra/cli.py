@@ -102,6 +102,71 @@ def _cmd_task(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+_STEP_LABELS = {"setup": "worktree ready", "plan": "plan ready (Opus)",
+                "builder": "Builder finished", "tester": "Tester finished",
+                "checks": "tests and lint ran", "adjudicate": "Code Joe judged the failure",
+                "package": "work committed on its branch", "finish": "stopped"}
+
+
+def _step(node: str) -> None:
+    print(f"  · {_STEP_LABELS.get(node, node)}", file=sys.stderr, flush=True)
+
+
+def _print_outcome(out: core.RunOutcome) -> int:
+    if out.outcome == "held":
+        for h in out.holds:
+            print(f"HOLD ({h['node']}): {h['summary']}")
+            print(f"  Approve: ezra approve {h['approval_id']}    "
+                  f"Reject: ezra reject {h['approval_id']}")
+        print(f"Spent so far: ${out.spend_usd:.4f}. The task is paused and saved.")
+        return EXIT_HOLD
+    if out.outcome == "stopped":
+        print(f"Code Joe stopped: {'; '.join(out.stopped) or 'unknown reason'}")
+        print(f"Spent: ${out.spend_usd:.4f}")
+        return EXIT_ERROR
+    r = out.result
+    pytest_run = next((c for c in r.command_runs if c.command == "pytest"), None)
+    passed = sum(c.outcome == "passed" for c in pytest_run.cases) if pytest_run else 0
+    total = len(pytest_run.cases) if pytest_run else 0
+    print(f"Code Joe finished: {r.status}. Branch {r.branch} ({len(r.changed_files)} files).")
+    print(f"Tests: {passed}/{total} passed. Model calls: {r.model_call_count}. "
+          f"Cost: ${out.spend_usd:.4f}.")
+    for issue in r.issues:
+        print(f"  issue: {issue}")
+    print(f"Nothing was merged. See it with: ezra task {r.task_id}")
+    return EXIT_OK
+
+
+def _run_guarded(fn) -> int:
+    store = core.open_store()
+    try:
+        return _print_outcome(fn(store, core.open_gateway(store)))
+    except core.RunError as e:
+        print(str(e), file=sys.stderr)
+        return EXIT_ERROR
+    except MissingCredentials as e:
+        print(str(e), file=sys.stderr)
+        return EXIT_ERROR
+    finally:
+        store.close()
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    print(f"Code Joe is working on {args.task_id}…", file=sys.stderr)
+    return _run_guarded(lambda store, gw: core.run_task(
+        store, gw, args.task_id, task_budget_usd=args.task_budget, on_step=_step))
+
+
+def _cmd_approve(args: argparse.Namespace) -> int:
+    return _run_guarded(lambda store, gw: core.answer_hold(
+        store, gw, args.approval_id, True, extend_usd=args.extend, on_step=_step))
+
+
+def _cmd_reject(args: argparse.Namespace) -> int:
+    return _run_guarded(lambda store, gw: core.answer_hold(
+        store, gw, args.approval_id, False, on_step=_step))
+
+
 def _cmd_approvals(_: argparse.Namespace) -> int:
     store = core.open_store()
     try:
@@ -127,6 +192,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_task.set_defaults(func=_cmd_task)
     p_apr = sub.add_parser("approvals", help="List decisions waiting for you")
     p_apr.set_defaults(func=_cmd_approvals)
+    p_run = sub.add_parser("run", help="Have Code Joe work on a created task")
+    p_run.add_argument("task_id")
+    p_run.add_argument("--task-budget", type=float, default=None,
+                       help="Lower the task's budget cap for this run (USD)")
+    p_run.set_defaults(func=_cmd_run)
+    p_ok = sub.add_parser("approve", help="Approve a HOLD and resume the task")
+    p_ok.add_argument("approval_id")
+    p_ok.add_argument("--extend", type=float, default=None,
+                      help="How much to raise the cap (USD). Default: just enough")
+    p_ok.set_defaults(func=_cmd_approve)
+    p_no = sub.add_parser("reject", help="Reject a HOLD and stop the task")
+    p_no.add_argument("approval_id")
+    p_no.set_defaults(func=_cmd_reject)
     return parser
 
 

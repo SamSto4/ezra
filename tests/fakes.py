@@ -64,3 +64,50 @@ class FakeClient:
     def __init__(self, replies: list[Any] | None = None, **kwargs):
         self.messages = FakeMessages(replies or [message()], **kwargs)
         self.beta = NS(messages=self.messages)
+
+
+# -- scripted client for Code Joe: one reply queue per role (Builder and Tester run in
+# parallel threads, so a single shared queue would hand out replies in random order) ------
+
+import threading  # noqa: E402
+
+
+def tool_turn(*calls, stop_reason="tool_use", input_tokens=200, output_tokens=80):
+    """calls: (name, input) pairs -> one assistant turn that asks for those tools."""
+    blocks = [NS(type="tool_use", id=f"tu_{i}_{name}", name=name, input=inp)
+              for i, (name, inp) in enumerate(calls)]
+    usage = NS(input_tokens=input_tokens, output_tokens=output_tokens,
+               cache_read_input_tokens=0, cache_creation_input_tokens=0, iterations=None)
+    return NS(model="claude-sonnet-5-5", stop_reason=stop_reason, usage=usage,
+              content=blocks, stop_details=None)
+
+
+class ScriptedMessages:
+    def __init__(self, scripts: dict[str, list[Any]], count: int = 100,
+                 counts: dict[str, int] | None = None):
+        self.scripts = {k: list(v) for k, v in scripts.items()}
+        self.count = count
+        self.counts = counts or {}  # per system prompt: steers worst-case estimates
+        self.lock = threading.Lock()
+        self.calls: list[dict[str, Any]] = []
+
+    def count_tokens(self, **kwargs):
+        return NS(input_tokens=self.counts.get(kwargs["system"][0]["text"], self.count))
+
+    def stream(self, **kwargs):
+        key = kwargs["system"][0]["text"]
+        with self.lock:
+            self.calls.append(kwargs)
+            queue = self.scripts.get(key)
+            if not queue:
+                raise AssertionError(f"no scripted reply left for: {key[:60]!r}")
+            reply = queue.pop(0)
+        if isinstance(reply, BaseException):
+            raise reply
+        return _Stream(reply)
+
+
+class ScriptedClient:
+    def __init__(self, scripts: dict[str, list[Any]], **kwargs):
+        self.messages = ScriptedMessages(scripts, **kwargs)
+        self.beta = NS(messages=self.messages)

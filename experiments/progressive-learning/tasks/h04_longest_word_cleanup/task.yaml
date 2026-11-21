@@ -1,6 +1,7 @@
 id: h04_longest_word_cleanup
 category: refactor
 split: heldout
+section: review
 description: 'Clean up longest_word in minitext/stats.py: add type hints and a docstring and simplify
   it, keeping its behavior (first word wins a tie, empty text gives an empty string).'
 criteria:

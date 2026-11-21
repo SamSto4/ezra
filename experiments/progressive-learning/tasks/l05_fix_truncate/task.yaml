@@ -1,6 +1,7 @@
 id: l05_fix_truncate
 category: bug_fix
 split: learn
+section: test
 description: truncate in minitext can return text longer than width when it adds "...". Fix it so the
   result is never longer than width.
 criteria:

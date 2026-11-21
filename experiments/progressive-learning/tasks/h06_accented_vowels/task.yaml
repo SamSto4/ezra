@@ -1,0 +1,28 @@
+id: h06_accented_vowels
+category: edge_case
+split: heldout
+section: build
+description: count_vowels and count_consonants in minitext/stats.py get accented letters wrong (é counts
+  as a consonant, not a vowel). Make accented vowels count as vowels.
+criteria:
+- id: AC1
+  text: Accented forms of a, e, i, o and u, in any case (for example á, É, î, ö, ù), count as vowels
+    and not as consonants
+  severity: critical
+  verification: test
+- id: AC2
+  text: Other letters, including accented ones such as ñ and ç, count as consonants
+  severity: major
+  verification: test
+- id: AC3
+  text: Digits, spaces and punctuation count as neither, and plain ASCII text gives the same results
+    as before
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies (the standard library is fine)

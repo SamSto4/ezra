@@ -1,0 +1,31 @@
+id: h07_move_formatting
+category: refactor
+split: heldout
+section: build
+description: Move title_case and truncate out of minitext/core.py into a new module minitext/formatting.py.
+  Code that imports them from minitext or from minitext.core must keep working, and their behavior must
+  not change.
+criteria:
+- id: AC1
+  text: title_case and truncate are defined in minitext/formatting.py and no longer defined in
+    minitext/core.py
+  severity: critical
+  verification: test
+- id: AC2
+  text: They can still be imported from minitext and from minitext.core, and those names refer to the
+    same functions
+  severity: critical
+  verification: test
+- id: AC3
+  text: Both functions return exactly what they did before for every input, including inputs where the
+    current behavior looks odd
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies
+- A move only; don't fix or change either function

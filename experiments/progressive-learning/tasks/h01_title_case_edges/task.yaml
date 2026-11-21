@@ -1,6 +1,7 @@
 id: h01_title_case_edges
 category: edge_case
 split: heldout
+section: test
 description: title_case in minitext crashes on empty text and on repeated spaces. Make it handle those,
   keeping the original spacing.
 criteria:

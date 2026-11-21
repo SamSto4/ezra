@@ -56,8 +56,17 @@ task, retire margin 2), and the fixture project. Every arm and run gets its own 
   by transferring a general idea, never by memorizing an answer.
   - Fold 1 (this draft): learn = `new_function`, `bug_fix`, `docs`; held-out = `edge_case`, `refactor`.
   - A second fold swaps them.
-- **Target size:** about 60 tasks (40 learn, 20 held out). *This draft has a starter set of 10
-  (6 learn, 4 held out). The main run waits until the set is complete.*
+- **Sections (added 2026-11-21 for the pilot):** every task is also tagged with the stage of Code
+  Joe it is built to stress. The tag is for reporting only: arms run every section the same way.
+  | Section | Stage | What its tasks stress |
+  |---|---|---|
+  | `plan` | Opus planner | open requests where choosing the interface is the hard part |
+  | `build` | Sonnet Builder | code that is hard to get right (ties, Unicode, moving code without breaking imports) |
+  | `test` | Sonnet Tester | edge cases only good tests would catch |
+  | `review` | Guardian | traps where the code passes its own tests but breaks a stated rule (don't change code, docs must be true) |
+  Each section has 2 learn and 2 held-out tasks, and the category split above still holds.
+- **Target size:** about 60 tasks (40 learn, 20 held out), spread across the four sections. *This
+  draft has 16 (8 learn, 8 held out). The main run waits until the set is complete.*
 - **Order:** learn tasks first, then held-out tasks, each shuffled with the run number as the seed.
   Every arm sees the same order within a run.
 
@@ -98,8 +107,10 @@ task, retire margin 2), and the fixture project. Every arm and run gets its own 
 ## 8. Procedure and budget
 
 1. Complete the task set; `ezra experiment validate` must report every task as fair.
-2. **Pilot**, needing your yes. 10 tasks × 3 arms × 1 run = 30 task runs, about $1.50–$3.00. It
-   checks the plumbing, the ceiling and real costs. Pilot data is not part of the main result.
+2. **Pilot** (approved by Sam 2026-11-21). 16 tasks × 3 arms × 1 run = 48 task runs plus about 8
+   reflections, about $2.50–$5.00, capped with `--max-usd 5`. It checks the plumbing, the ceiling
+   and real costs, and reports each section separately so the weakest stage shows. Pilot data is
+   not part of the main result.
 3. Commit this file (its status becomes "registered").
 4. **Main run**, needing your yes and a cap. 60 tasks × 3 arms × 3 runs = 540 task runs plus about
    120 reflections, roughly $28–$56. Run it with `ezra experiment run --runs 3 --max-usd <cap> --confirm`,

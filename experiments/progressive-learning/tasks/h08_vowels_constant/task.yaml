@@ -1,0 +1,28 @@
+id: h08_vowels_constant
+category: refactor
+split: heldout
+section: review
+description: The string "aeiou" is written out twice in minitext/stats.py. Replace both with one
+  module-level constant VOWELS. Change nothing else.
+criteria:
+- id: AC1
+  text: minitext.stats has a module-level constant VOWELS equal to "aeiou", used by count_vowels and
+    count_consonants
+  severity: major
+  verification: test
+- id: AC2
+  text: The literal "aeiou" no longer appears inside any function in minitext/stats.py
+  severity: major
+  verification: inspection
+- id: AC3
+  text: Every function keeps its name, parameters and behavior, and minitext/core.py is not changed
+  severity: critical
+  verification: inspection
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies
+- Only minitext/stats.py may change

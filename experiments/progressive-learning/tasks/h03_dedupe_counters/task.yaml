@@ -1,6 +1,7 @@
 id: h03_dedupe_counters
 category: refactor
 split: heldout
+section: plan
 description: count_vowels and count_consonants in minitext/stats.py repeat the same loop. Add a shared
   helper count_matching(text, predicate) and rewrite both on top of it, without changing their behavior.
 criteria:

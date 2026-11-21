@@ -27,6 +27,12 @@ def test_task_set_is_balanced_and_well_formed():
     assert len({t.id for t in TASKS}) == len(TASKS)
 
 
+def test_every_section_has_learn_and_heldout_tasks():
+    for section in ex.SECTIONS:
+        splits = [t.split for t in TASKS if t.section == section]
+        assert splits.count("learn") >= 2 and splits.count("heldout") >= 2, section
+
+
 @pytest.mark.parametrize("task", TASKS, ids=lambda t: t.id)
 def test_every_task_is_fair(task, tmp_path):
     check = ex.validate_task(task, tmp_path)
@@ -143,6 +149,36 @@ def test_summary_and_paired_difference():
     assert d["pairs"] == 10 and d["diff"] == pytest.approx(0.4)
     assert d["ci_low"] <= 0.4 <= d["ci_high"]
     assert ex.paired_difference(rows, "budget_matched") is None
+
+
+def test_summary_by_section():
+    rows = _rows()
+    for r in rows:
+        r["section"] = "plan" if r["task"] in ("t0", "t1") else "test"
+    plan = ex.summarize(rows, split=None, section="plan")
+    assert plan["control"]["success_rate"] == 1.0 and plan["control"]["n"] == 4
+    assert ex.summarize(rows, section="review") == {}
+
+
+def test_cli_cap_covers_the_whole_command(monkeypatch, capsys):
+    from ezra import cli
+    caps = []
+
+    def fake_run_arm(arm, run, tasks, max_usd, on_task=None):
+        caps.append(round(max_usd, 2))
+        return [ex.Row(arm=arm, run=run, task="t", category="bug_fix", split="learn",
+                       section="test", memory="off", task_id="x", outcome="passed",
+                       verdict="PASS", reviews=1, hidden_pass=True, hidden_cases=1,
+                       hidden_failed=0, cost_usd=0.4, input_tokens=1, output_tokens=1,
+                       cache_read_tokens=0, lessons_used=[], lessons_added=[])]
+
+    monkeypatch.setattr(ex, "run_arm", fake_run_arm)
+    assert cli.main(["experiment", "run", "--runs", "2", "--sections", "test",
+                     "--max-usd", "1", "--confirm"]) == cli.EXIT_OK
+    # Each arm gets what's left of the one cap, and the loop stops once it's used up.
+    assert caps == [1.0, 0.6, 0.2]
+    assert "Spent $1.2000 of the $1.00 cap" in capsys.readouterr().out
+    assert cli.main(["experiment", "estimate", "--sections", "nope"]) == cli.EXIT_ERROR
 
 
 def test_cli_estimate_and_run_needs_confirmation(capsys):

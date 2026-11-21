@@ -1,6 +1,7 @@
 id: l03_wrap
 category: new_function
 split: learn
+section: plan
 description: 'Add wrap(text, width) to minitext: split text into lines of at most width characters, breaking
   only between words.'
 criteria:

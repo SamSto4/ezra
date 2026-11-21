@@ -47,6 +47,9 @@ EXPERIMENT_DIR = PROJECT_ROOT / "experiments" / "progressive-learning"
 RESULTS_DIR = DATA_DIR / "experiments" / "progressive-learning"
 SPLITS = ("learn", "heldout")
 CATEGORIES = ("new_function", "bug_fix", "docs", "edge_case", "refactor")
+# Pilot sections: the stage of Code Joe a task is built to stress (plan -> build -> test -> review).
+# A label for reporting only: every arm runs every section the same way.
+SECTIONS = ("plan", "build", "test", "review")
 # Measured in M4/M5: a coding task costs about $0.05-0.07; a reflection about $0.005-0.01.
 TASK_COST_RANGE = (0.05, 0.10)
 REFLECT_COST = 0.01
@@ -73,6 +76,7 @@ class TaskSpec:
     id: str
     category: str
     split: str
+    section: str
     description: str
     criteria: list[AcceptanceCriterion]
     constraints: list[str]
@@ -93,10 +97,12 @@ def load_tasks(base: Path = EXPERIMENT_DIR) -> list[TaskSpec]:
         if not (tdir / "task.yaml").exists():
             continue
         meta = yaml.safe_load((tdir / "task.yaml").read_text())
-        if meta["split"] not in SPLITS or meta["category"] not in CATEGORIES:
-            raise ValueError(f"{tdir.name}: bad split or category")
+        if (meta["split"] not in SPLITS or meta["category"] not in CATEGORIES
+                or meta.get("section") not in SECTIONS):
+            raise ValueError(f"{tdir.name}: bad split, category or section")
         tasks.append(TaskSpec(
             id=meta["id"], category=meta["category"], split=meta["split"],
+            section=meta["section"],
             description=meta["description"],
             criteria=[AcceptanceCriterion.model_validate(c) for c in meta["criteria"]],
             constraints=meta.get("constraints", []), path=tdir))
@@ -225,6 +231,7 @@ class Row:
     task: str
     category: str
     split: str
+    section: str
     memory: str
     task_id: str
     outcome: str
@@ -287,7 +294,7 @@ def run_arm(arm_name: str, run: int, tasks: list[TaskSpec], max_usd: float,
             spent += cost
             row = Row(
                 arm=arm_name, run=run, task=task.id, category=task.category,
-                split=task.split, memory=memory, task_id=env.task_id,
+                split=task.split, section=task.section, memory=memory, task_id=env.task_id,
                 outcome=out.outcome if out else "error",
                 verdict=str(out.review.verdict) if out and out.review else None,
                 reviews=out.reviews if out else 0,
@@ -321,10 +328,13 @@ def load_rows(path: Path = RESULTS_DIR / "results.jsonl") -> list[dict[str, Any]
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def summarize(rows: list[dict[str, Any]], split: str = "heldout") -> dict[str, dict[str, Any]]:
+def summarize(rows: list[dict[str, Any]], split: str | None = "heldout",
+              section: str | None = None) -> dict[str, dict[str, Any]]:
+    """Per-arm numbers over one split (None: both) and optionally one section."""
     out: dict[str, dict[str, Any]] = {}
     for arm in sorted({r["arm"] for r in rows}):
-        rs = [r for r in rows if r["arm"] == arm and r["split"] == split]
+        rs = [r for r in rows if r["arm"] == arm and (split is None or r["split"] == split)
+              and (section is None or r.get("section") == section)]
         if not rs:
             continue
         wins = sum(r["hidden_pass"] for r in rs)

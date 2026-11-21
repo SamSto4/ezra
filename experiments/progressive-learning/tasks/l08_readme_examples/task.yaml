@@ -1,0 +1,27 @@
+id: l08_readme_examples
+category: docs
+split: learn
+section: review
+description: 'Write a README.md for minitext with a short usage example for every public function.
+  Document the code as it is today: do not change any code.'
+criteria:
+- id: AC1
+  text: README.md exists at the project root and names every function listed in minitext.__all__
+  severity: major
+  verification: inspection
+- id: AC2
+  text: Every example is written as doctest lines (">>> call" followed by the exact output), and every
+    example's output is what the function really returns today
+  severity: critical
+  verification: inspection
+- id: AC3
+  text: No file under minitext/ is changed
+  severity: critical
+  verification: inspection
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

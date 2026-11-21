@@ -1,0 +1,32 @@
+id: l07_top_words
+category: new_function
+split: learn
+section: build
+description: 'Add top_words(text, n) to minitext: the n most common words, ignoring case and the
+  punctuation around words.'
+criteria:
+- id: AC1
+  text: top_words(text, n) is importable from minitext and returns a list of (word, count) tuples, most
+    common first, with words in lowercase
+  severity: critical
+  verification: test
+- id: AC2
+  text: Punctuation at the start or end of a word is ignored, so "Cat," and "cat" are the same word
+  severity: major
+  verification: test
+- id: AC3
+  text: Words with the same count keep the order in which they first appear in the text
+  severity: major
+  verification: test
+- id: AC4
+  text: Empty text, or n of 0, gives an empty list; n larger than the number of distinct words gives
+    all of them
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

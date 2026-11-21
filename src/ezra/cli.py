@@ -410,7 +410,8 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
             for t in tasks:
                 check = ex.validate_task(t, Path(tmp))
                 bad += not check.ok
-                print(f"{'ok  ' if check.ok else 'FAIL'} {t.id} [{t.split} · {t.category}]"
+                print(f"{'ok  ' if check.ok else 'FAIL'} {t.id} "
+                      f"[{t.section} · {t.split} · {t.category}]"
                       + ("" if check.ok else f": {'; '.join(check.problems)}"))
         print(f"{len(tasks) - bad}/{len(tasks)} tasks are fair.")
         return EXIT_OK if not bad else EXIT_ERROR
@@ -430,7 +431,22 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
             if d:
                 print(f"{arm} - control: {d['diff']:+.1%} (95% CI {d['ci_low']:+.1%} to "
                       f"{d['ci_high']:+.1%}, {d['pairs']} paired tasks)")
+        print("\nBy section (learn and held-out together):")
+        for section in ex.SECTIONS:
+            parts = [f"{arm} {s['success_rate']:.0%} (${s['mean_cost_usd']:.3f}/task, "
+                     f"Guardian PASS {s['guardian_pass_rate']:.0%})"
+                     for arm, s in ex.summarize(rows, split=None, section=section).items()]
+            if parts:
+                print(f"  {section:7} " + " · ".join(parts))
         return EXIT_OK
+    if getattr(args, "sections", None):
+        wanted = args.sections.split(",")
+        bad = [x for x in wanted if x not in ex.SECTIONS]
+        if bad:
+            print(f"Unknown section(s): {', '.join(bad)}. Sections: {', '.join(ex.SECTIONS)}",
+                  file=sys.stderr)
+            return EXIT_ERROR
+        tasks = [t for t in tasks if t.section in wanted]
     arms = args.arms.split(",") if getattr(args, "arms", None) else list(ex.ARMS)
     unknown = [a for a in arms if a not in ex.ARMS]
     if unknown:
@@ -447,13 +463,21 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
         print("Nothing was run. Live runs spend money: add --max-usd and --confirm once "
               "you've agreed to the cost.")
         return EXIT_HOLD
+    spent = 0.0  # --max-usd caps the whole command, across every arm and run
     try:
         for run in range(1, args.runs + 1):
             for arm in arms:
+                if args.max_usd - spent < ex.TASK_COST_RANGE[0]:
+                    print(f"Stopping before {arm}, run {run}: the cap is used up.",
+                          file=sys.stderr)
+                    break
                 print(f"Running {arm}, run {run}…", file=sys.stderr)
-                ex.run_arm(arm, run, tasks, max_usd=args.max_usd, on_task=lambda r: print(
-                    f"  {r.task}: {r.outcome}, hidden {'pass' if r.hidden_pass else 'FAIL'}, "
-                    f"${r.cost_usd:.4f}", file=sys.stderr))
+                rows = ex.run_arm(arm, run, tasks, max_usd=args.max_usd - spent,
+                                  on_task=lambda r: print(
+                    f"  {r.task} [{r.section}]: {r.outcome}, hidden "
+                    f"{'pass' if r.hidden_pass else 'FAIL'}, ${r.cost_usd:.4f}", file=sys.stderr))
+                spent += sum(r.cost_usd for r in rows)
+        print(f"Spent ${spent:.4f} of the ${args.max_usd:.2f} cap.")
     except (core.RunError, MissingCredentials) as e:
         print(str(e), file=sys.stderr)
         return EXIT_ERROR
@@ -533,6 +557,8 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--arms", default=None, help="Comma-separated: control,lessons,"
                        "budget_matched (default: all)")
         p.add_argument("--runs", type=int, default=3, help="Runs per arm (default 3)")
+        p.add_argument("--sections", default=None, help="Comma-separated: plan,build,test,"
+                       "review (default: all)")
         if name == "run":
             p.add_argument("--max-usd", type=float, required=True,
                            help="Hard cap on spend for this whole command")

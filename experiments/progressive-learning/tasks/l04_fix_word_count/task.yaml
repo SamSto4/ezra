@@ -1,6 +1,7 @@
 id: l04_fix_word_count
 category: bug_fix
 split: learn
+section: test
 description: word_count in minitext gives wrong answers for empty text and for text with repeated spaces,
   tabs or newlines. Fix it.
 criteria:

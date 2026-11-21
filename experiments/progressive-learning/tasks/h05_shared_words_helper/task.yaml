@@ -1,0 +1,29 @@
+id: h05_shared_words_helper
+category: refactor
+split: heldout
+section: plan
+description: 'minitext splits text into words in several places. Add one public helper, words(text), and
+  use it in average_word_length and longest_word, without changing what they return.'
+criteria:
+- id: AC1
+  text: words(text) is importable from minitext and returns the whitespace-separated words of text as
+    a list, splitting on any whitespace
+  severity: critical
+  verification: test
+- id: AC2
+  text: average_word_length and longest_word in minitext/stats.py use words() instead of splitting text
+    themselves
+  severity: major
+  verification: inspection
+- id: AC3
+  text: average_word_length and longest_word return exactly what they did before
+  severity: critical
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies
+- Don't change word_count

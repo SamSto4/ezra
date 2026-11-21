@@ -1,6 +1,7 @@
 id: l06_document_stats
 category: docs
 split: learn
+section: review
 description: minitext/stats.py has no docstrings. Add a module docstring and a docstring to every public
   function, without changing behavior.
 criteria:

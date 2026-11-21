@@ -7,6 +7,7 @@ Secrets never go in here: callers pass contracts, and contracts carry no credent
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import sqlite3
 import threading
@@ -89,12 +90,27 @@ CREATE TABLE IF NOT EXISTS approval_records (
     record      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approval_records(status);
+CREATE TABLE IF NOT EXISTS run_leases (
+    task_id     TEXT PRIMARY KEY,
+    pid         INTEGER NOT NULL,
+    host        TEXT NOT NULL,
+    started_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS texts (
+    sha         TEXT PRIMARY KEY,
+    created_at  TEXT NOT NULL,
+    text        TEXT NOT NULL
+);
 """
 
 
 def _ts(dt: datetime | None = None) -> str:
     # Fixed-width UTC text, so string comparison in SQL matches time order.
     return (dt or utcnow()).astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def text_sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _locked(method):
@@ -231,6 +247,47 @@ class Store(metaclass=_ThreadSafe):
             (task_id,),
         ).fetchall()
         return [GuardianReview.model_validate_json(r["record"]) for r in rows]
+
+    # -- run leases (M6) --------------------------------------------------------
+    # Which process is driving a task right now. A crash leaves the row behind with a dead
+    # pid, which is how `ezra run --resume` tells a stuck task from one that's still going.
+
+    def get_lease(self, task_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT pid, host, started_at FROM run_leases WHERE task_id=?",
+                                (task_id,)).fetchone()
+        return dict(row) if row else None
+
+    def take_lease(self, task_id: str, pid: int, host: str) -> None:
+        with self.conn:
+            self.conn.execute("INSERT OR REPLACE INTO run_leases (task_id, pid, host, "
+                              "started_at) VALUES (?, ?, ?, ?)", (task_id, pid, host, _ts()))
+
+    def release_lease(self, task_id: str, pid: int) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM run_leases WHERE task_id=? AND pid=?",
+                              (task_id, pid))
+
+    # -- texts (M6 attribution) -------------------------------------------------
+    # Full prompt, context and reply text, stored once per distinct content and referenced
+    # by sha256 from invocation records. Lives only in the local, gitignored database.
+
+    def put_text(self, text: str) -> str:
+        sha = text_sha(text)
+        with self.conn:
+            self.conn.execute("INSERT OR IGNORE INTO texts (sha, created_at, text) "
+                              "VALUES (?, ?, ?)", (sha, _ts(), text))
+        return sha
+
+    def get_text(self, sha: str) -> str | None:
+        """Full hash, or a unique prefix of at least 8 hex characters."""
+        if len(sha) < 64:
+            if len(sha) < 8 or any(c not in "0123456789abcdef" for c in sha):
+                return None
+            rows = self.conn.execute("SELECT text FROM texts WHERE sha >= ? AND sha < ? "
+                                     "LIMIT 2", (sha, sha + "g")).fetchall()
+            return rows[0]["text"] if len(rows) == 1 else None
+        row = self.conn.execute("SELECT text FROM texts WHERE sha = ?", (sha,)).fetchone()
+        return row["text"] if row else None
 
     # -- trace events --------------------------------------------------------
 

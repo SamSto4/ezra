@@ -2,7 +2,7 @@
 
 **Goal:** one real coding request flows end to end: **User → Ezra → Code Joe (Builder + Tester) → Guardian → User**. Every model call is logged, and every step lands in a trace we can read in Phase 2.
 **Governed by:** [decisions.md](decisions.md) (D-001 to D-016).
-**Status:** Approved. M1–M5 are done; see section 9.
+**Status:** Approved. M1–M6 are done; see section 9. D-017 (rerun cap for fixable REVISEs) is waiting on the user.
 
 ---
 
@@ -337,3 +337,40 @@ The steps are ordered so everything that needs **no API access** comes first. We
     - Guardian answers are filtered to the criteria it was asked about (re-judged, invented and duplicate entries are dropped)
     - CLI output for `run` and `task`
   - **Noted, not changed:** if Guardian's own call fails (cut off, refused or an API error), the task ends `failed` rather than `escalated`. Treating "couldn't review" as ESCALATE would match D-002's "unverifiable counts as unmet" better. It's a Guardian rule change, so it needs the user's yes.
+
+**M6, done (2026-11-21).** The trace viewer, attribution logging, stuck-task tools, and the first real task end to end. 185 tests pass and ruff is clean.
+
+- **`ezra trace <task_id>`** (`trace.py`, `core.get_trace`): one timeline built only from the store, so it costs nothing to read.
+  - Every step and every model call: model, input, output and cache tokens, cost and time. Then HOLDs, approvals, verdicts, and a per-operation table with totals.
+  - `-v` adds each call's prompt version and injected context. `--text <hash>` prints any stored prompt, context piece or reply (a 12-character prefix is enough).
+- **Attribution (for D-012's experiments):** every `ModelInvocation` now records:
+  - `prompt_version`: the operation name plus a fingerprint of the system prompt, so a wording change shows up as a new version.
+  - `context`: the labelled pieces the step injected (for example `criteria`, `interface_spec`, `diff`, `fix_feedback`), each with its size and hash.
+  - `message_hashes` and `response_hash`: the full text of what was sent and received.
+  - The full texts live in a local `texts` table, stored once per distinct content (53 texts, about 61 KB after the first real task). The table is in the gitignored database, so nothing reaches GitHub. No migration was needed, because old records simply have empty fields.
+- **Stuck tasks:**
+  - Each run takes a **lease** (process id and host). A lease whose process is gone marks the task as stuck, not running.
+  - `ezra run <id> --resume` continues from the last saved step; only the interrupted step runs again. It refuses while another live process holds the lease, and points a HOLD to `ezra approve`/`reject`.
+  - `ezra abandon <id>` closes a stuck task as failed, keeps its branch and worktree, and rejects its pending HOLDs.
+  - Ctrl-C prints the resume command. A setup step that was cut off is restarted cleanly, but a branch that already holds commits is never replaced.
+- **`ezra review <id>`** for tasks packaged before Guardian existed. The saved run is attached to the current graph as if `package` had just finished (LangGraph `update_state(..., as_node="package")`). So the normal path follows: review, then PASS, REVISE (Builder fixes it, tests frozen) or ESCALATE. The database is never edited by hand.
+- **Live results:**
+
+  | Task | What | Result | Cost |
+  |---|---|---|---|
+  | `task_43299c6a98c1` | review only (sentence_count) | PASS, rule 9, Tier 2 | $0.016 for the review ($0.065 in total) |
+  | `task_a2656c048f23` | review only (char_count) | PASS, plus one minor finding: ruff import order in the test file | $0.011 for the review ($0.056 in total) |
+  | `task_2449616ff1c8` | **first real task end to end:** `top_words(text, n)` | PASS on the first try, 9/9 tests, 8 criteria met | **$0.075**, 9 calls, 27 s of model time |
+  | `task_6e70fb3a99e9` | longest_word, interrupted with Ctrl-C and resumed | PASS, 9/9 tests | $0.078 |
+
+- **Live Ctrl-C check** (`task_6e70fb3a99e9`, longest_word): the run got a real SIGINT 1.5 s after the plan was ready, while Builder and Tester were mid-stream in their threads.
+  - **Bug found live, then fixed:** the worker threads finished their turns anyway, because Python only interrupts the main thread, and LangGraph saved their results. But it never committed the step, so `get_state().next` read empty and resume wrongly said "already finished". Resume now also counts saved-but-uncommitted tasks (`snap.tasks`). The fake-only crash test (an interrupt inside a single node) couldn't show this.
+  - After the fix, `ezra run --resume` went straight to checks, package and review. Builder and Tester were **not** rerun, and the task passed. Total $0.078, the same as an uninterrupted run.
+  - Note: Ctrl-C doesn't cut short Builder or Tester calls already in flight; they finish (and are billed) before the process exits.
+- **M6 live spend in total: $0.18.**
+- **Baseline cost per successful task: about $0.075** (intake $0.015, plan $0.021, Builder $0.015, Tester $0.013, Guardian $0.012). Cache reads made up 8,811 of the 20,048 input-side tokens.
+- **Gateway hardening:** attribution writes happen inside the reservation's try/finally, and a failed reply-text write can't lose a billed call's invocation row.
+- **Workspace:** a leftover worktree from a cut-off setup is force-removed, and its branch deleted, only if that branch has no commits.
+- **Fixed along the way:** `ezra ask` no longer says "Code Joe starts working on tasks in M4"; it prints the run command.
+- **Open:** D-017. The user wants fixable REVISE findings rerun and important ones escalated to them. The cap on reruns is a loop-limit change (D-009 Level 1), so it waits for the user's number. Until then the one-correction rule (D-004) stands.
+

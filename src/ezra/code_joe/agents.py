@@ -118,6 +118,16 @@ def project_context(root: Path, include_acceptance: bool = False) -> str:
     return "\n".join(out)
 
 
+def _constraints(env: TaskEnvelope) -> str:
+    return "\n".join(f"- {c}" for c in env.constraints) or "- none"
+
+
+def _task_context(env: TaskEnvelope) -> list[tuple[str, str]]:
+    """The labelled pieces most steps inject, for attribution."""
+    return [("task", env.description), ("criteria", criteria_text(env.acceptance_criteria)),
+            ("constraints", _constraints(env))]
+
+
 # -- plan ----------------------------------------------------------------------------
 
 PLAN_SYSTEM = """\
@@ -140,13 +150,13 @@ named test_<topic>.py.
 
 def make_plan(call: Callable[..., Any], env: TaskEnvelope, worktree: Path
               ) -> tuple[Plan, list[ModelInvocation]]:
+    files = project_context(worktree)
     user = (f"## Task\n{env.description}\n\n## Acceptance criteria\n"
             f"{criteria_text(env.acceptance_criteria)}\n\n## Constraints\n"
-            + ("\n".join(f"- {c}" for c in env.constraints) or "- none")
-            + f"\n\n## Project files\n{project_context(worktree)}")
+            + _constraints(env) + f"\n\n## Project files\n{files}")
     resp = call(operation="code_joe.plan", department=Department.CODE_JOE, system=PLAN_SYSTEM,
                 messages=[{"role": "user", "content": user}], max_tokens=PLAN_MAX_TOKENS,
-                task_id=env.task_id,
+                task_id=env.task_id, context=_task_context(env) + [("project_files", files)],
                 output_format={"type": "json_schema", "schema": PLAN_SCHEMA})
     invs = [resp.invocation]
     if resp.truncated or not resp.text.strip():
@@ -188,12 +198,15 @@ def build(call: Callable[..., Any], env: TaskEnvelope, plan: Plan, worktree: Pat
             + f"\n\n## Interface spec\n{interface_text(plan.interface)}"
             f"\n\n## Acceptance criteria\n{criteria_text(env.acceptance_criteria)}"
             "\n\n## Constraints\n" + ("\n".join(f"- {c}" for c in env.constraints) or "- none"))
+    context = _task_context(env) + [("plan", plan.summary),
+                                    ("interface_spec", interface_text(plan.interface))]
     if feedback:
         user += f"\n\n## Fix needed (your previous attempt failed checks)\n{feedback}"
+        context.append(("fix_feedback", feedback))
     return run_agent(call, operation="builder.implement", department=Department.BUILDER,
                      system=BUILD_SYSTEM, user=user, tools=FileTools(worktree, Role.BUILDER),
                      max_turns=AGENT_MAX_TURNS, max_tokens=AGENT_MAX_TOKENS,
-                     task_id=env.task_id)
+                     task_id=env.task_id, context=context)
 
 
 # -- write tests ----------------------------------------------------------------------
@@ -219,12 +232,15 @@ def write_tests(call: Callable[..., Any], env: TaskEnvelope, plan: Plan, worktre
     user = (f"## Test file to write\n{plan.test_file}\n\n## Interface spec\n"
             f"{interface_text(plan.interface)}\n\n## Criteria to test\n"
             f"{criteria_text(env.acceptance_criteria, only=Verification.TEST)}")
+    context = [("interface_spec", interface_text(plan.interface)),
+               ("criteria", criteria_text(env.acceptance_criteria, only=Verification.TEST))]
     if feedback:
         user += f"\n\n## Fix needed (your previous tests were judged wrong)\n{feedback}"
+        context.append(("fix_feedback", feedback))
     return run_agent(call, operation="tester.write_tests", department=Department.TESTER,
                      system=TEST_SYSTEM, user=user, tools=FileTools(worktree, Role.TESTER),
                      max_turns=AGENT_MAX_TURNS, max_tokens=AGENT_MAX_TOKENS,
-                     task_id=env.task_id)
+                     task_id=env.task_id, context=context)
 
 
 # -- adjudicate --------------------------------------------------------------------------
@@ -243,13 +259,16 @@ empty.
 
 def adjudicate(call: Callable[..., Any], env: TaskEnvelope, plan: Plan, worktree: Path,
                failures: str) -> tuple[Adjudication, list[ModelInvocation]]:
+    files = project_context(worktree, include_acceptance=True)
     user = (f"## Acceptance criteria\n{criteria_text(env.acceptance_criteria)}\n\n"
             f"## Interface spec\n{interface_text(plan.interface)}\n\n## Failing checks\n"
-            f"{failures}\n\n## Project files now\n"
-            f"{project_context(worktree, include_acceptance=True)}")
+            f"{failures}\n\n## Project files now\n{files}")
     resp = call(operation="code_joe.adjudicate", department=Department.CODE_JOE,
                 system=ADJUDICATE_SYSTEM, messages=[{"role": "user", "content": user}],
                 max_tokens=ADJUDICATE_MAX_TOKENS, task_id=env.task_id,
+                context=[("criteria", criteria_text(env.acceptance_criteria)),
+                         ("interface_spec", interface_text(plan.interface)),
+                         ("failing_checks", failures), ("project_files", files)],
                 output_format={"type": "json_schema", "schema": ADJUDICATION_SCHEMA})
     invs = [resp.invocation]
     try:

@@ -256,6 +256,7 @@ def run_intake(gateway: Gateway, request: str, *, project: Path, limits: Limits,
         resp = gateway.call(operation=OPERATION, department=Department.EZRA,
                             system=SYSTEM_PROMPT, messages=messages, max_tokens=MAX_TOKENS,
                             task_id=request_id,
+                            context=[("project_summary", summary), ("request", request)],
                             output_format={"type": "json_schema", "schema": SCHEMA})
         invocations.append(resp.invocation)
         if resp.truncated:

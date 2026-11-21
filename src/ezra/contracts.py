@@ -329,6 +329,15 @@ class GuardianReview(_Model):
 # ---------------------------------------------------------------------------
 
 
+class ContextRef(_Model):
+    """One labelled piece of context injected into a call (for later attribution, D-012).
+    The full text lives in the store's text table, keyed by `sha`."""
+
+    label: str
+    chars: int
+    sha: str
+
+
 class ModelInvocation(_Model):
     invocation_id: str = Field(default_factory=lambda: new_id("inv"))
     task_id: str | None
@@ -354,6 +363,13 @@ class ModelInvocation(_Model):
     fallback_used: bool = False
     stop_reason: str | None = None
     request_id: str | None = None
+    # Attribution (M6): which prompt version and which injected context this call used.
+    # Hashes point into the store's text table, where the full text is kept (locally only).
+    prompt_name: str = ""
+    prompt_version: str = ""  # "<name>@<first 10 hex of sha256(system prompt)>"
+    context: list[ContextRef] = Field(default_factory=list)
+    message_hashes: list[str] = Field(default_factory=list)
+    response_hash: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 

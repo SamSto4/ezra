@@ -427,3 +427,187 @@ def test_cli_task_shows_the_verdict(env, monkeypatch, capsys):
     assert cli.main(["task", envelope.task_id]) == cli.EXIT_OK
     shown = capsys.readouterr().out
     assert "[done]" in shown and "Review 1: PASS (rule 9, tier2_checklist)" in shown
+
+
+# -- trace (M6) ------------------------------------------------------------------------
+
+
+def test_trace_shows_every_step_call_and_the_verdict(env, monkeypatch, capsys):
+    store, envelope, tmp = env
+    cli = _cli(monkeypatch, tmp / "ezra.db", tmp, SCRIPTS)
+    cli.main(["run", envelope.task_id])
+    capsys.readouterr()
+    tr = core.get_trace(store, envelope.task_id)
+    steps = [r.step for r in tr.rows]
+    for step in ("setup", "plan", "builder", "tester", "checks", "package", "review",
+                 "deliver"):
+        assert step in steps
+    calls = [r for r in tr.rows if r.kind == "model_call"]
+    assert len(calls) == tr.calls == len(store.invocations_for_task(envelope.task_id))
+    assert tr.verdict == "PASS"
+    assert abs(sum(t.cost_usd for t in tr.totals) - store.spend_for_task(envelope.task_id)) \
+        < 1e-9
+    # Attribution is recorded on every call, with the context each step injected.
+    for r in calls:
+        assert r.invocation.prompt_version.startswith(r.invocation.operation_id + "@")
+    plan_ctx = [c.label for c in calls[0].invocation.context]
+    assert plan_ctx == ["task", "criteria", "constraints", "project_files"]
+
+    assert cli.main(["trace", envelope.task_id, "-v"]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "claude-opus-5-5" in out and "PASS (rule 9" in out
+    assert "prompt builder.implement@" in out and "context interface_spec" in out
+    assert "Outcome: done, PASS." in out
+    sha = calls[0].invocation.response_hash[:12]  # a unique prefix is enough
+    assert cli.main(["trace", envelope.task_id, "--text", sha]) == cli.EXIT_OK
+    assert "Add calc.py with double()." in capsys.readouterr().out
+
+
+def test_trace_unknown_task(env, monkeypatch, capsys):
+    store, envelope, tmp = env
+    cli = _cli(monkeypatch, tmp / "ezra.db", tmp, SCRIPTS)
+    assert cli.main(["trace", "task_nope"]) == cli.EXIT_ERROR
+
+
+# -- stuck tasks: resume and abandon (M6) ----------------------------------------------
+
+
+def _crash_in_review(store, envelope, tmp):
+    crashing = dict(SCRIPTS, **{GUARDIAN_SYSTEM: [KeyboardInterrupt()]})
+    with pytest.raises(KeyboardInterrupt):
+        core.run_task(store, _gw(store, crashing), envelope.task_id, **_paths(tmp))
+    assert store.get_task(envelope.task_id)[1] is TaskStatus.IN_REVIEW
+
+
+def test_resume_after_a_crash_reruns_only_the_interrupted_step(env):
+    store, envelope, tmp = env
+    _crash_in_review(store, envelope, tmp)
+    with pytest.raises(core.RunError, match="only created"):
+        core.run_task(store, _gw(store, SCRIPTS), envelope.task_id, **_paths(tmp))
+    gw = _gw(store, {GUARDIAN_SYSTEM: [GUARDIAN_PASS]})
+    out = core.resume_task(store, gw, envelope.task_id, **_paths(tmp))
+    assert out.outcome == "passed" and out.status is TaskStatus.DONE
+    # Plan, Builder and Tester were not run again: only Guardian was called.
+    assert [c["system"][0]["text"] for c in gw.client.messages.calls] == [GUARDIAN_SYSTEM]
+    assert "run_resumed" in kinds(store, envelope.task_id)
+    assert store.get_lease(envelope.task_id) is None
+    with pytest.raises(core.RunError, match="nothing to resume"):
+        core.resume_task(store, gw, envelope.task_id, **_paths(tmp))
+
+
+def test_resume_refuses_while_another_process_is_running_it(env):
+    import os
+    import socket
+    store, envelope, tmp = env
+    _crash_in_review(store, envelope, tmp)
+    store.take_lease(envelope.task_id, os.getppid(), socket.gethostname())  # alive
+    with pytest.raises(core.RunError, match="being worked on right now"):
+        core.resume_task(store, _gw(store, {}), envelope.task_id, **_paths(tmp))
+    with pytest.raises(core.RunError, match="being worked on right now"):
+        core.abandon_task(store, envelope.task_id)
+    # A lease left by a process that died (a hard crash) doesn't block anything.
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    store.take_lease(envelope.task_id, dead.pid, socket.gethostname())
+    out = core.resume_task(store, _gw(store, {GUARDIAN_SYSTEM: [GUARDIAN_PASS]}),
+                           envelope.task_id, **_paths(tmp))
+    assert out.outcome == "passed"
+
+
+def test_resume_refuses_a_held_task_and_points_to_approve(env):
+    store, envelope, tmp = env
+    _plan_hold(store, envelope, tmp, SCRIPTS)
+    with pytest.raises(core.RunError, match="ezra approve"):
+        core.resume_task(store, _gw(store, SCRIPTS), envelope.task_id, **_paths(tmp))
+
+
+def test_abandon_closes_a_stuck_task_and_rejects_its_holds(env):
+    store, envelope, tmp = env
+    aid = _plan_hold(store, envelope, tmp, SCRIPTS)
+    assert core.abandon_task(store, envelope.task_id, "testing") is TaskStatus.HELD
+    assert store.get_task(envelope.task_id)[1] is TaskStatus.FAILED
+    assert store.get_approval(aid).status is ApprovalStatus.REJECTED
+    assert store.pending_approvals() == []
+    with pytest.raises(core.RunError, match="already failed"):
+        core.abandon_task(store, envelope.task_id)
+
+
+def test_cli_resume_and_abandon(env, monkeypatch, capsys):
+    store, envelope, tmp = env
+    _crash_in_review(store, envelope, tmp)
+    cli = _cli(monkeypatch, tmp / "ezra.db", tmp, {GUARDIAN_SYSTEM: [GUARDIAN_PASS]})
+    real_resume = core.resume_task
+    monkeypatch.setattr(core, "resume_task", lambda *a, **k: real_resume(*a, **k, **_paths(tmp)))
+    assert cli.main(["run", envelope.task_id, "--resume"]) == cli.EXIT_OK
+    assert "Guardian verdict: PASS" in capsys.readouterr().out
+    assert cli.main(["abandon", envelope.task_id]) == cli.EXIT_ERROR  # already done
+
+
+def test_interrupted_setup_is_restarted_cleanly(env, project):
+    from ezra.code_joe.workspace import create_worktree
+    store, envelope, tmp = env
+    create_worktree(project, envelope.task_id, tmp / "wt")  # left behind by a cut-off setup
+    out, _ = run(store, tmp, SCRIPTS, envelope.task_id)
+    assert out.outcome == "passed"
+    # But a branch that already holds commits is never thrown away.
+    with pytest.raises(RuntimeError, match="already has commits"):
+        create_worktree(project, envelope.task_id, tmp / "wt2")
+
+
+# -- review for tasks packaged before Guardian existed (M6) -----------------------------
+
+
+def _legacy_task(store, envelope, tmp):
+    """A task whose saved run ended at `package` with no review, like the two M4 tasks."""
+    import sqlite3
+
+    from langgraph.checkpoint.sqlite import SqliteSaver
+
+    from ezra.code_joe.graph import Context, build_graph
+    _crash_in_review(store, envelope, tmp)
+    conn = sqlite3.connect(str(tmp / "cp.db"), check_same_thread=False)
+    app = build_graph(Context(store=store, gateway=None, worktrees_dir=tmp / "wt",
+                              test_timeout=60), SqliteSaver(conn))
+    cfg = {"configurable": {"thread_id": envelope.task_id}}
+    app.update_state(cfg, None, as_node="deliver")  # mark the run finished, nothing executed
+    assert app.get_state(cfg).next == ()
+    conn.close()
+
+
+def test_review_gives_a_stranded_task_its_verdict(env):
+    store, envelope, tmp = env
+    _legacy_task(store, envelope, tmp)
+    gw = _gw(store, {GUARDIAN_SYSTEM: [GUARDIAN_PASS]})
+    out = core.review_task(store, gw, envelope.task_id, **_paths(tmp))
+    assert out.outcome == "passed" and out.status is TaskStatus.DONE and out.reviews == 1
+    assert [c["system"][0]["text"] for c in gw.client.messages.calls] == [GUARDIAN_SYSTEM]
+    assert "review_requested" in kinds(store, envelope.task_id)
+    with pytest.raises(core.RunError, match="only tasks waiting in review"):
+        core.review_task(store, gw, envelope.task_id, **_paths(tmp))
+
+
+def test_review_of_a_stranded_task_follows_the_normal_revise_path(env):
+    store, envelope, tmp = env
+    _legacy_task(store, envelope, tmp)
+    flagged = guardian(findings=[("special_cases_test_inputs", "major", "hardcoded")],
+                       corrections=["Implement double as x * 2."])
+    gw = _gw(store, {GUARDIAN_SYSTEM: [flagged, GUARDIAN_PASS],
+                     BUILD_SYSTEM: [writes("calc.py", GOOD), message("fixed")]})
+    out = core.review_task(store, gw, envelope.task_id, **_paths(tmp))
+    assert out.outcome == "passed" and out.reviews == 2
+    assert [r.verdict for r in store.reviews_for_task(envelope.task_id)] == ["REVISE", "PASS"]
+
+
+def test_review_refuses_a_task_cut_off_mid_review(env):
+    store, envelope, tmp = env
+    _crash_in_review(store, envelope, tmp)
+    with pytest.raises(core.RunError, match="--resume"):
+        core.review_task(store, _gw(store, {}), envelope.task_id, **_paths(tmp))
+
+
+def test_resumable_counts_finished_but_uncommitted_parallel_steps():
+    from types import SimpleNamespace as NS
+    # The live Ctrl-C case: Builder and Tester both saved results, the step wasn't committed.
+    assert core._resumable(NS(next=(), tasks=[NS(name="builder"), NS(name="tester")]))
+    assert core._resumable(NS(next=("review",), tasks=[NS(name="review")]))
+    assert not core._resumable(NS(next=(), tasks=[]))  # a finished run

@@ -8,6 +8,7 @@ import { TasksView } from "./views/TasksView";
 import { ApprovalsView } from "./views/ApprovalsView";
 import { AgentsView } from "./views/AgentsView";
 import { SystemView } from "./views/SystemView";
+import { LessonsView } from "./views/LessonsView";
 import { ActivityPanel } from "./components/ActivityPanel";
 
 export type Route =
@@ -16,12 +17,13 @@ export type Route =
   | { view: "approvals" }
   | { view: "agents" }
   | { view: "system" }
+  | { view: "lessons" }
   | { view: "task"; id: string };
 
 function parseHash(): Route {
   const h = window.location.hash.replace(/^#\/?/, "");
   if (h.startsWith("task/")) return { view: "task", id: h.slice(5) };
-  if (h === "tasks" || h === "approvals" || h === "agents" || h === "system") return { view: h };
+  if (h === "tasks" || h === "approvals" || h === "agents" || h === "system" || h === "lessons") return { view: h };
   return { view: "home" };
 }
 
@@ -100,7 +102,8 @@ export default function App() {
                                          cacheSaved={system?.cache_saved_usd ?? null} />}
         {route.view === "tasks" && <TasksView tasks={tasks} />}
         {route.view === "agents" && <AgentsView tick={tick} events={events} />}
-        {route.view === "system" && <SystemView system={system} />}
+        {route.view === "system" && <SystemView system={system} status={status} />}
+        {route.view === "lessons" && <LessonsView tick={tick} onChange={bump} />}
         {route.view === "approvals" && <ApprovalsView tick={tick} onChange={bump} />}
         {route.view === "task" && <TaskView id={route.id} tick={tick} onChange={bump} system={system} />}
       </div></main>

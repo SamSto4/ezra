@@ -28,6 +28,7 @@ STEP_OF_OPERATION = {
     "tester.write_tests": "tester",
     "code_joe.adjudicate": "adjudicate",
     "guardian.tier2": "review",
+    "learner.reflect": "learner",
 }
 
 
@@ -38,6 +39,7 @@ class TraceRow:
     kind: str  # "model_call" or an event kind
     detail: str
     invocation: ModelInvocation | None = None
+    data: dict[str, Any] = field(default_factory=dict)  # the raw event, for friendlier UIs
 
 
 @dataclass
@@ -144,6 +146,14 @@ def _event_detail(kind: str, d: dict[str, Any]) -> tuple[str, str]:
             return "review", f"review requested: {d.get('reason', '')}"
         case "abandoned":
             return "stopped", f"abandoned (was {d.get('status_before')}): {d.get('reason')}"
+        case "lessons_injected":
+            return "learner", f"gave {len(d.get('lessons', []))} lesson(s) to {d.get('operation')}"
+        case "lessons_learned":
+            return "learner", (f"learned: +{len(d.get('added', []))} added, "
+                               f"{len(d.get('merged', []))} merged, "
+                               f"{len(d.get('retired', []))} retired")
+        case "lesson_rejected":
+            return "learner", f"rejected a lesson: {str(d.get('reason', ''))[:100]}"
         case "unpriced_model":
             return "budget", f"no price for {d.get('model')}; counted at worst case"
     return "other", _short(f"{k}={v}" for k, v in d.items())
@@ -172,7 +182,7 @@ def build_trace(store: Store, task_id: str) -> Trace | None:
                                  kind="model_call", detail=_call_detail(inv), invocation=inv))
             continue
         step, detail = _event_detail(kind, data)
-        rows.append(TraceRow(at=at, step=step, kind=kind, detail=detail))
+        rows.append(TraceRow(at=at, step=step, kind=kind, detail=detail, data=data))
     # Invocations with no finished event (shouldn't happen; kept so nothing is hidden).
     for inv in invocations.values():
         if inv.invocation_id not in seen:

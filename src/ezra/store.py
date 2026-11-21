@@ -210,6 +210,9 @@ class Store(metaclass=_ThreadSafe):
     def list_tasks(self, limit: int = 50) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             """SELECT t.task_id, t.created_at, t.updated_at, t.status, t.description,
+                      (SELECT json_extract(e.data, '$.title') FROM events e
+                        WHERE e.task_id = t.task_id AND e.kind = 'intake_routed'
+                        ORDER BY e.id LIMIT 1) AS title,
                       COALESCE(SUM(COALESCE(i.actual_cost_usd, i.estimated_cost_usd, 0)), 0)
                         AS spend_usd
                FROM tasks t LEFT JOIN model_invocations i ON i.task_id = t.task_id
@@ -387,6 +390,12 @@ class Store(metaclass=_ThreadSafe):
     def last_event_id(self) -> int:
         row = self.conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM events").fetchone()
         return int(row["m"])
+
+    def task_title(self, task_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT json_extract(data, '$.title') AS t FROM events WHERE task_id = ? AND "
+            "kind = 'intake_routed' ORDER BY id LIMIT 1", (task_id,)).fetchone()
+        return row["t"] if row else None
 
     def events_after(self, last_id: int, task_id: str | None = None,
                      limit: int = 200) -> list[dict[str, Any]]:

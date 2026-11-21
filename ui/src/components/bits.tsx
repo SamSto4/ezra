@@ -17,23 +17,30 @@ export function Star({ size = 28 }: { size?: number }) {
   );
 }
 
+const VERDICT_WORD: Record<string, string> = {
+  PASS: "Approved", REVISE: "Sent back", HOLD: "Paused", ESCALATE: "Needs you",
+};
 const VERDICT_CLASS: Record<string, string> = { PASS: "ok", REVISE: "warn", HOLD: "warn", ESCALATE: "bad" };
 
 export function VerdictBadge({ verdict }: { verdict: Verdict | string | null }) {
-  if (!verdict) return <span className="badge">NO VERDICT</span>;
-  return <span className={`badge ${VERDICT_CLASS[verdict] ?? ""}`}>{verdict}</span>;
+  if (!verdict) return <span className="badge">Not reviewed</span>;
+  return <span className={`badge ${VERDICT_CLASS[verdict] ?? ""}`} title={`Guardian's verdict: ${verdict}`}>
+    {VERDICT_WORD[verdict] ?? verdict}</span>;
 }
 
+const STATUS_WORD: Record<string, string> = {
+  created: "Ready to start", running: "Working", in_review: "Waiting for review",
+  held: "Waiting on you", done: "Done", escalated: "Needs you", failed: "Stopped",
+};
 const STATUS_CLASS: Record<string, string> = {
   done: "ok", running: "live", held: "warn", in_review: "live", escalated: "bad", failed: "bad",
   created: "",
 };
 
 export function StatusDot({ status }: { status: string }) {
-  const label = status.replace("_", " ");
   return (
     <span className={`status ${STATUS_CLASS[status] ?? ""}`}>
-      <i />{label.charAt(0).toUpperCase() + label.slice(1)}
+      <i />{STATUS_WORD[status] ?? status}
     </span>
   );
 }

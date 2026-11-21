@@ -24,6 +24,7 @@ export interface TaskSummary {
   created_at: string;
   status: string;
   description: string;
+  title: string | null;
   spend_usd: number;
   verdict: Verdict | null;
   job: Job | null;
@@ -56,6 +57,7 @@ export interface TraceRow {
   step: string;
   kind: string;
   detail: string;
+  data: Record<string, unknown>;
   invocation: Invocation | null;
 }
 
@@ -90,6 +92,28 @@ export interface AgentInfo {
   runs?: number;
   revisions?: number;
   routed?: number;
+  lessons_active?: number;
+  lessons_total?: number;
+  learned_from?: number;
+  memory?: string;
+}
+
+export interface Lesson {
+  lesson_id: string;
+  operation: string;
+  project: string | null;
+  kind: "strategy" | "pitfall" | "check";
+  trigger: string;
+  text: string;
+  evidence: string[];
+  source: string;
+  status: "active" | "retired";
+  helpful: number;
+  harmful: number;
+  uses: number;
+  version: number;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface SystemInfo {
@@ -116,6 +140,7 @@ export interface TaskDetail {
   task: { task_id: string; description: string; acceptance_criteria: Criterion[];
           constraints: string[]; budget: { task_limit_usd: number } };
   status: string;
+  title: string | null;
   verdict: Verdict | null;
   spend_usd: number;
   calls: number;
@@ -172,7 +197,11 @@ export const api = {
   system: () => call<SystemInfo>("/api/system"),
   diff: (id: string) => call<{ branch: string; diff: string; truncated?: boolean; note?: string }>(`/api/tasks/${id}/diff`),
   ask: (request: string) => post<AskResult>("/api/ask", { request }),
-  run: (id: string, cap?: number) => post<Job>(`/api/tasks/${id}/run`, cap ? { task_budget_usd: cap } : undefined),
+  run: (id: string, cap?: number, memory?: string) =>
+    post<Job>(`/api/tasks/${id}/run`, cap || memory ? { task_budget_usd: cap ?? null, memory: memory ?? null } : undefined),
+  learn: (id: string) => post<Job>(`/api/tasks/${id}/learn`),
+  lessons: () => call<Lesson[]>("/api/lessons"),
+  retireLesson: (id: string) => post<Lesson>(`/api/lessons/${id}/retire`),
   resume: (id: string) => post<Job>(`/api/tasks/${id}/resume`),
   review: (id: string) => post<Job>(`/api/tasks/${id}/review`),
   abandon: (id: string) => post<unknown>(`/api/tasks/${id}/abandon`),

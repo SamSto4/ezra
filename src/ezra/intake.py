@@ -159,7 +159,9 @@ required_evidence: what proves the criterion, e.g. "acceptance test for AC1 pass
 constraints: rules the implementation must follow that the user stated or clearly implied,
 e.g. "no new dependencies". Leave it empty if there are none.
 
-task_title: imperative, under 60 characters. task_description: the goal in 1-3 sentences.
+task_title: imperative, under 60 characters, in plain words a person would say (no code
+identifiers, file names or underscores), e.g. "Count the most common words".
+task_description: the goal in 1-3 sentences.
 """
 
 

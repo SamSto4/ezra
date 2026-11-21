@@ -102,7 +102,7 @@ def test_agents_roster_reports_each_agent_with_its_numbers(client):
     c.post(f"/api/tasks/{envelope.task_id}/run", headers=H)
     wait(c, envelope.task_id)
     agents = {a["id"]: a for a in c.get("/api/agents").json()}
-    assert list(agents) == ["intake", "code_joe", "builder", "tester", "guardian"]
+    assert list(agents) == ["intake", "code_joe", "builder", "tester", "guardian", "learner"]
     assert agents["code_joe"]["plans"] == 1 and agents["code_joe"]["calls"] == 1
     assert agents["builder"]["calls"] == 2 and agents["tester"]["runs"] == 1
     assert agents["guardian"]["verdicts"] == {"PASS": 1}
@@ -127,3 +127,16 @@ def test_system_view_diff_and_run_cap(client):
     assert wait(c, envelope.task_id)["outcome"] == "passed"
     d = c.get(f"/api/tasks/{envelope.task_id}/diff").json()
     assert "+def double" in d["diff"] and "test_ac1_doubles_two" in d["diff"]
+
+
+def test_learner_and_lessons_endpoints(client):
+    c, envelope, _ = client
+    agents = {a["id"]: a for a in c.get("/api/agents").json()}
+    assert agents["learner"]["memory"] in ("off", "lessons", "frozen")
+    assert c.get("/api/lessons").json() == []
+    assert c.get("/api/lessons/les_nope").status_code == 404
+    assert c.post("/api/lessons/les_nope/retire", headers=H).status_code == 409
+    assert c.post(f"/api/tasks/{envelope.task_id}/run", headers=H,
+                  json={"memory": "bogus"}).status_code == 400
+    trace_names = {r["operation"] for r in c.get("/api/system").json()["routing"]}
+    assert "learner.reflect" in trace_names

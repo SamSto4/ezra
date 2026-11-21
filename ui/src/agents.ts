@@ -1,7 +1,7 @@
 // One identity per agent, used everywhere (pipeline, trace, activity, roster), so the
 // same color always means the same agent.
 
-export type AgentId = "intake" | "code_joe" | "builder" | "tester" | "checks" | "guardian";
+export type AgentId = "intake" | "code_joe" | "builder" | "tester" | "checks" | "guardian" | "learner";
 
 // Volt keeps color for meaning, so agents are told apart by a two-letter monogram, not a
 // rainbow. The only lit color is lime, and it always means "working right now".
@@ -19,6 +19,8 @@ export const AGENT: Record<AgentId, { name: string; short: string; glyph: string
             does: "Runs pytest and ruff, no model" },
   guardian: { name: "Guardian", short: "Guardian", glyph: "GU", hue: "var(--ink-muted)", model: true,
               does: "Reviews the diff and decides the verdict" },
+  learner: { name: "Learner", short: "Learner", glyph: "LE", hue: "var(--ink-muted)", model: true,
+             does: "Turns finished tasks into lessons for next time" },
 };
 
 /** Trace step (from the server) → the agent that owns it. */
@@ -30,6 +32,7 @@ export function agentOfStep(step: string): AgentId | null {
     case "tester": return "tester";
     case "checks": return "checks";
     case "review": case "deliver": case "escalate": return "guardian";
+    case "learner": return "learner";
     default: return null;
   }
 }
@@ -41,6 +44,7 @@ export function agentOfOperation(op: string): AgentId | null {
   if (op.startsWith("builder.")) return "builder";
   if (op.startsWith("tester.")) return "tester";
   if (op.startsWith("guardian.")) return "guardian";
+  if (op.startsWith("learner.")) return "learner";
   return null;
 }
 

@@ -1,5 +1,6 @@
 import { usd, type TaskSummary } from "../api";
 import { ago, Eyebrow, Panel, StatusDot, VerdictBadge } from "../components/bits";
+import { taskName, taskSummary } from "../humanize";
 
 export function TasksView({ tasks }: { tasks: TaskSummary[] }) {
   const passed = tasks.filter((t) => t.verdict === "PASS");
@@ -10,7 +11,7 @@ export function TasksView({ tasks }: { tasks: TaskSummary[] }) {
     <>
       <div className="page-head">
         <div>
-          <Eyebrow>Work</Eyebrow>
+          <Eyebrow>Everything Ezra has worked on</Eyebrow>
           <h1 className="page-title">Tasks</h1>
         </div>
       </div>
@@ -25,19 +26,19 @@ export function TasksView({ tasks }: { tasks: TaskSummary[] }) {
         {!!tasks.length && (
           <table className="table">
             <thead>
-              <tr><th>Task</th><th>Status</th><th>Verdict</th><th className="r">Cost</th><th className="r hide-sm">Created</th></tr>
+              <tr><th>Task</th><th>Status</th><th>Review</th><th className="r">Cost</th><th className="r hide-sm">Started</th></tr>
             </thead>
             <tbody>
               {tasks.map((t) => (
                 <tr key={t.task_id} className="clickable" tabIndex={0} onClick={() => go(t.task_id)}
                     onKeyDown={(e) => { if (e.key === "Enter") go(t.task_id); }}>
                   <td className="task-cell">
-                    <span className="clip">{t.description}</span>
-                    <span className="mono muted">{t.task_id}</span>
+                    <span className="task-name clip">{taskName(t.title, t.description)}</span>
+                    <span className="task-sub clip">{taskSummary(t.description, t.status, t.verdict).split(" · ").slice(1).join(" · ")}</span>
                   </td>
                   <td><StatusDot status={t.status} /></td>
                   <td><VerdictBadge verdict={t.verdict} /></td>
-                  <td className="mono r">{usd(t.spend_usd)}</td>
+                  <td className="r num">{usd(t.spend_usd, 3)}</td>
                   <td className="muted small r hide-sm">{ago(t.created_at)}</td>
                 </tr>
               ))}

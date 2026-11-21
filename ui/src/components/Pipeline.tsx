@@ -1,11 +1,12 @@
 import type { CSSProperties } from "react";
 import { AGENT, PIPELINE } from "../agents";
 import { usd, type TraceRow } from "../api";
+import { modelName } from "../humanize";
 
 export type NodeKey = string; // `${agentId}:${label}`
 type State = "waiting" | "active" | "done" | "failed" | "skipped";
 
-interface NodeState { state: State; calls: number; cost: number; note: string }
+interface NodeState { state: State; calls: number; cost: number; note: string; model: string }
 
 const TERMINAL = ["done", "escalated", "failed"];
 
@@ -17,11 +18,12 @@ function nodeState(rows: TraceRow[], steps: string[], running: boolean, status: 
   const events = mine.filter((r) => !r.invocation);
   const note = events.length ? events[events.length - 1].detail : "";
   if (!mine.length) {
-    return { state: TERMINAL.includes(status) ? "skipped" : "waiting", calls: 0, cost: 0, note: "" };
+    return { state: TERMINAL.includes(status) ? "skipped" : "waiting", calls: 0, cost: 0, note: "", model: "" };
   }
-  if (running && isLast) return { state: "active", calls: calls.length, cost, note };
+  const model = modelName(calls[calls.length - 1]?.invocation?.model_id);
+  if (running && isLast) return { state: "active", calls: calls.length, cost, note, model };
   const failed = mine.some((r) => /FAILED|ESCALATE|stopped/.test(r.detail));
-  return { state: failed ? "failed" : "done", calls: calls.length, cost, note };
+  return { state: failed ? "failed" : "done", calls: calls.length, cost, note, model };
 }
 
 const rank: Record<State, number> = { failed: 4, active: 3, done: 2, skipped: 1, waiting: 0 };
@@ -73,12 +75,11 @@ export function Pipeline({ rows, running, status, selected, onSelect }: {
                 <span className="node-agent">{a.short}</span>
                 <span className="node-label">{n.label}</span>
                 <span className="node-meta">
-                  {n.st.state === "waiting" && "waiting"}
-                  {n.st.state === "skipped" && "not needed"}
-                  {n.st.state === "active" && "working…"}
+                  {n.st.state === "waiting" && "Waiting"}
+                  {n.st.state === "skipped" && "Not needed"}
+                  {n.st.state === "active" && "Working…"}
                   {(n.st.state === "done" || n.st.state === "failed") &&
-                    (a.model ? `${n.st.calls} call${n.st.calls === 1 ? "" : "s"} · ${usd(n.st.cost, 3)}`
-                             : "no model · $0")}
+                    (a.model ? `${n.st.model} · ${usd(n.st.cost, 3)}` : "No model · free")}
                 </span>
               </button>
             );

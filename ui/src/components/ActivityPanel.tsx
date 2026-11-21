@@ -2,7 +2,8 @@ import type { CSSProperties } from "react";
 import { AGENT, agentOfOperation, type AgentId } from "../agents";
 import type { EzraEvent, TaskSummary } from "../api";
 import { usd } from "../api";
-import { clock, Eyebrow, StatusDot, VerdictBadge } from "./bits";
+import { clock, Eyebrow, VerdictBadge } from "./bits";
+import { taskName, taskSummary } from "../humanize";
 
 // The pipeline as it runs, one line per step, from the live event stream.
 const STEP_TEXT: Record<string, (d: Record<string, unknown>) => string> = {
@@ -46,13 +47,13 @@ export function ActivityPanel({ events, tasks }: { events: EzraEvent[]; tasks: T
     <>
       <section className="rail-section" aria-live="polite">
         <div className="rail-head">
-          <Eyebrow dot={running ? "var(--ok)" : "var(--muted)"}>Live activity</Eyebrow>
+          <Eyebrow dot={running ? "var(--accent)" : "var(--muted)"}>{running ? "Working now" : "Activity"}</Eyebrow>
           {lastTask && <span className="mono muted">{usd(spent)}</span>}
         </div>
-        {!lastTask && <p className="muted small">Quiet. Steps appear here the moment an agent starts.</p>}
+        {!lastTask && <p className="muted small">All quiet. When an agent starts, you'll see each step here as it happens.</p>}
         {lastTask && (
           <>
-            <a className="mono dim" href={`#/task/${lastTask}`}>{lastTask} →</a>
+            <a className="dim small" href={`#/task/${lastTask}`}>Open this task →</a>
             <ol className="feed" style={{ marginTop: 12 }}>
               {steps.map((s) => {
                 const a = EVENT_AGENT[s.kind];
@@ -78,19 +79,18 @@ export function ActivityPanel({ events, tasks }: { events: EzraEvent[]; tasks: T
       </section>
       <section className="rail-section">
         <div className="rail-head">
-          <Eyebrow>Recent tasks</Eyebrow>
+          <Eyebrow>Recent work</Eyebrow>
           <a className="small dim" href="#/tasks">All →</a>
         </div>
         <ul className="task-list">
           {tasks.slice(0, 6).map((t) => (
             <li key={t.task_id}>
               <a href={`#/task/${t.task_id}`}>
-                <span className="clip">{t.description}</span>
-                <span className="row-meta">
-                  <StatusDot status={t.status} />
+                <span className="task-name-row">
+                  <span className="task-name clip">{taskName(t.title, t.description)}</span>
                   {t.verdict && <VerdictBadge verdict={t.verdict} />}
-                  <span className="mono muted" style={{ marginLeft: "auto" }}>{usd(t.spend_usd, 3)}</span>
                 </span>
+                <span className="task-sub">{taskSummary(t.description, t.status, t.verdict)}</span>
               </a>
             </li>
           ))}

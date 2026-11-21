@@ -63,6 +63,7 @@ class AskBody(BaseModel):
 
 class RunBody(BaseModel):
     task_budget_usd: float | None = None  # can only lower the task's cap
+    memory: str | None = None  # "off", "lessons" or "frozen" for this run only
 
 
 class AnswerBody(BaseModel):
@@ -86,7 +87,7 @@ def trace_json(tr: Trace) -> dict[str, Any]:
         "task": _dump(tr.envelope), "status": str(tr.status), "verdict": tr.verdict,
         "spend_usd": tr.spend_usd, "calls": tr.calls, "unpriced_calls": tr.unpriced_calls,
         "rows": [{"at": r.at.isoformat(), "step": r.step, "kind": r.kind, "detail": r.detail,
-                  "invocation": _dump(r.invocation) if r.invocation else None}
+                  "data": r.data, "invocation": _dump(r.invocation) if r.invocation else None}
                  for r in tr.rows],
         "totals": [t.__dict__ for t in tr.totals],
         "reviews": [_dump(r) for r in tr.reviews],
@@ -160,6 +161,7 @@ def create_app(open_store: Callable[[], Store] = core.open_store,
         if tr is None:
             raise HTTPException(404, f"No task '{task_id}'.")
         data = trace_json(tr)
+        data["title"] = with_store(lambda s: s.task_title(task_id))
         data["job"] = jobs[task_id].__dict__ if task_id in jobs else None
         return data
 
@@ -300,8 +302,43 @@ def create_app(open_store: Callable[[], Store] = core.open_store,
             limit = core.load_limits().task_budget_usd
             if not 0 < cap <= limit:
                 raise HTTPException(400, f"A run's cap can only be lowered (max ${limit:.2f}).")
+        memory = body.memory if body else None
+        if memory not in (None, "off", "lessons", "frozen"):
+            raise HTTPException(400, "memory must be off, lessons or frozen.")
         return start_job(task_id, "run", lambda s, gw: core.run_task(
-            s, gw, task_id, task_budget_usd=cap, **extra)).__dict__
+            s, gw, task_id, task_budget_usd=cap, memory=memory, **extra)).__dict__
+
+    @app.post("/api/tasks/{task_id}/learn", status_code=202)
+    def learn(task_id: str) -> dict[str, Any]:
+        @dataclass
+        class _Done:
+            outcome: str
+
+        def go(s: Store, gw: Gateway) -> _Done:
+            out = core.learn(s, gw, task_id)
+            return _Done("skipped" if out.skipped and not out.reflected else "learned")
+        return start_job(task_id, "learn", go).__dict__
+
+    @app.get("/api/lessons")
+    def lessons() -> list[dict[str, Any]]:
+        found = with_store(lambda s: core.list_lessons(s, include_retired=True))
+        return [_dump(x) for x in found]
+
+    @app.get("/api/lessons/{lesson_id}")
+    def lesson(lesson_id: str) -> dict[str, Any]:
+        found = with_store(lambda s: core.lesson_history(s, lesson_id))
+        if found is None:
+            raise HTTPException(404, f"No lesson '{lesson_id}'.")
+        les, history = found
+        return {"lesson": _dump(les), "history": history}
+
+    @app.post("/api/lessons/{lesson_id}/retire")
+    def retire(lesson_id: str) -> dict[str, Any]:
+        try:
+            done = with_store(lambda s: core.retire_lesson(s, lesson_id, "retired in the UI"))
+            return _dump(done)
+        except core.RunError as e:
+            raise HTTPException(409, str(e)) from e
 
     @app.post("/api/tasks/{task_id}/resume", status_code=202)
     def resume(task_id: str) -> dict[str, Any]:

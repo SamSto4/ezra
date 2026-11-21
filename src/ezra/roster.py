@@ -60,6 +60,14 @@ ROSTER: tuple[AgentSpec, ...] = (
         operations=("guardian.tier2",),
         can=("Judge inspection criteria with evidence", "Report findings and corrections"),
         cannot=("Edit code", "See Builder's conversation", "Pick the verdict itself")),
+    AgentSpec(
+        id="learner", name="Learner", department="Learner",
+        role="Looks back at finished tasks and distills short lessons for next time. A lesson "
+             "is only kept after a check, and one that keeps hurting is retired on its own.",
+        operations=("learner.reflect",),
+        can=("Propose lessons from Guardian's outcomes", "Rate whether used lessons helped"),
+        cannot=("Change Guardian's rules", "Give lessons to Guardian",
+                "Keep a lesson that fails its check")),
 )
 
 
@@ -135,6 +143,13 @@ def agent_stats(store: Store) -> list[dict[str, Any]]:
             extra = {"runs": events.get("tester_done", 0)}
         elif spec.id == "intake":
             extra = {"routed": events.get("intake_routed", 0)}
+        elif spec.id == "learner":
+            from ezra.config import load_learning
+            from ezra.contracts import LessonStatus
+            extra = {"lessons_active": len(store.lessons(LessonStatus.ACTIVE)),
+                     "lessons_total": len(store.lessons()),
+                     "learned_from": events.get("lessons_learned", 0),
+                     "memory": load_learning().memory}
         out.append({
             **asdict(spec), "operations": [asdict(o) for o in ops], "calls": calls,
             "cost_usd": sum(o.cost_usd for o in ops),

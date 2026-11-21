@@ -4,8 +4,10 @@ Standards are Ezra's durable, reusable rules for how the user wants things done 
 This folder holds their **format**. The user's actual Standards are personal, so they live in
 `standards/private/`, which is gitignored and never leaves this machine (D-013).
 
-**Nothing reads these files yet.** Under D-008 the Standards library is built from evidence in
-Phase 3. Until it's wired in, Standards here are a record, not something Ezra enforces.
+**Ezra doesn't enforce these files yet.** Under D-008 the Standards library is built from evidence
+in Phase 3. Until it's wired in, Standards here are a record. The only thing that reads them is
+the format check, `ezra bench standard <file>` (see [docs/benchmarks.md](../docs/benchmarks.md)),
+which takes its required fields and sections from the template.
 
 ## Layout
 

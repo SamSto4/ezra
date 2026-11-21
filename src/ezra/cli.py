@@ -284,6 +284,39 @@ def _cmd_approvals(_: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _print_score(s) -> None:
+    print(f"{s.kind} (benchmarks v{s.benchmark_version}): "
+          + ("PASS" if s.passed else "FAIL") + ("" if s.clean or not s.passed else
+                                                 " with warnings"))
+    for g in s.gates:
+        print(f"  gate     {g}")
+    for w in s.warnings:
+        print(f"  warning  {w}")
+    if s.metrics:
+        print("  " + " · ".join(f"{k} {v}" for k, v in s.metrics.items()))
+
+
+def _cmd_bench(args: argparse.Namespace) -> int:
+    if args.kind == "references":
+        results = core.check_references()
+        for ex, s, ok in results:
+            want = "best: passes cleanly" if ex.expected_to_pass else "weak: gets caught"
+            print(f"{'ok  ' if ok else 'FAIL'}  {ex.id:34} {want} "
+                  f"({len(s.gates)} gates, {len(s.warnings)} warnings)")
+        return EXIT_OK if all(ok for *_, ok in results) else EXIT_ERROR
+    if not args.path:
+        print("give a file to score, or - for stdin", file=sys.stderr)
+        return EXIT_ERROR
+    try:
+        text = sys.stdin.read() if args.path == "-" else open(args.path, encoding="utf-8").read()
+    except OSError as e:
+        print(str(e), file=sys.stderr)
+        return EXIT_ERROR
+    s = core.benchmark(args.kind, text)
+    _print_score(s)
+    return EXIT_OK if s.passed else EXIT_ERROR
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ezra", description="Ezra, your AI agent.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -324,6 +357,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_no = sub.add_parser("reject", help="Reject a HOLD and stop the task")
     p_no.add_argument("approval_id")
     p_no.set_defaults(func=_cmd_reject)
+    p_b = sub.add_parser("bench", help="Score an output against the reference benchmarks")
+    p_b.add_argument("kind", choices=["criteria", "standard", "answer", "review", "eval",
+                                      "references"],
+                     help="what the file is; 'references' self-checks docs/reference-outputs")
+    p_b.add_argument("path", nargs="?", help="file to score, or - for stdin")
+    p_b.set_defaults(func=_cmd_bench)
     return parser
 
 

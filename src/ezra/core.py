@@ -16,6 +16,8 @@ from typing import Any
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
+from ezra.benchmarks import BenchmarkScore, ReferenceExample, load_examples
+from ezra.benchmarks import score as score_benchmark
 from ezra.code_joe.graph import Context, build_graph
 from ezra.config import DATA_DIR, PLAYGROUND_DIR, load_limits, load_routing
 from ezra.contracts import (
@@ -49,6 +51,21 @@ def open_gateway(store: Store, client: Any = None) -> Gateway:
 def ask(gateway: Gateway, request: str, project: Path = PLAYGROUND_DIR) -> IntakeResult:
     """Route a request: answer it, turn it into a task for Code Joe, or explain why not."""
     return run_intake(gateway, request, project=project, limits=gateway.limits)
+
+
+def benchmark(kind: str, text: str) -> BenchmarkScore:
+    """Score one output against its reference benchmark (zero model calls)."""
+    return score_benchmark(kind, text)
+
+
+def check_references() -> list[tuple[ReferenceExample, BenchmarkScore, bool]]:
+    """Score every reference example. ok means best passed cleanly or weak was caught."""
+    out = []
+    for ex in load_examples():
+        s = score_benchmark(ex.scorer, ex.body)
+        ok = s.clean if ex.expected_to_pass else not s.clean
+        out.append((ex, s, ok))
+    return out
 
 
 @dataclass

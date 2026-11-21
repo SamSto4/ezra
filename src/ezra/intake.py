@@ -298,6 +298,15 @@ def run_intake(gateway: Gateway, request: str, *, project: Path, limits: Limits,
             budget=Budget(task_limit_usd=limits.task_budget_usd,
                           daily_limit_usd=limits.daily_budget_usd))
         gateway.store.save_task(result.envelope)
+    if decision.route is Route.CODE:
+        # Benchmark against docs/reference-outputs/acceptance-criteria.md. Logged only: no
+        # repair, no extra model call, so it costs nothing and changes no behaviour.
+        # Imported here because ezra.benchmarks imports this module.
+        from ezra.benchmarks.scorers import score_intake_decision
+        bench = score_intake_decision(decision)
+        gateway.store.log_event(request_id, "intake_benchmark",
+                                benchmark_version=bench.benchmark_version,
+                                warnings=bench.warnings, metrics=bench.metrics)
     gateway.store.log_event(request_id, "intake_routed", route=str(decision.route),
                             title=result.task_title,
                             criteria=len(decision.acceptance_criteria),

@@ -123,6 +123,18 @@ def create_worktree(repo: Path | str, task_id: str, worktrees_dir: Path | str) -
     branch = f"ezra/{task_id}"
     path = Path(worktrees_dir).resolve() / task_id
     path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() or _git("branch", "--list", branch, cwd=repo).strip():
+        # Left over from a setup step that was cut off before it was saved: nothing has run
+        # in it yet (setup is the first step), so start it again cleanly. Never throw away a
+        # branch that already holds commits.
+        if _git("branch", "--list", branch, cwd=repo).strip() and \
+                _git("rev-list", "--count", f"{base}..{branch}", cwd=repo).strip() != "0":
+            raise RuntimeError(f"branch {branch} already has commits; not replacing it")
+        if path.exists():
+            _git("worktree", "remove", "--force", str(path), cwd=repo)
+        _git("worktree", "prune", cwd=repo)
+        if _git("branch", "--list", branch, cwd=repo).strip():
+            _git("branch", "-D", branch, cwd=repo)
     _git("worktree", "add", "-b", branch, str(path), base, cwd=repo)
     return Worktree(repo=repo, path=path, branch=branch, base_commit=base)
 

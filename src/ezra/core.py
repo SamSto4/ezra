@@ -4,7 +4,10 @@ functions and only formats what they return. No interface holds logic of its own
 
 from __future__ import annotations
 
+import contextlib
 import math
+import os
+import socket
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,19 +17,32 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.types import Command
 
 from ezra.code_joe.graph import Context, build_graph
-from ezra.config import DATA_DIR, PLAYGROUND_DIR, load_limits, load_routing
+from ezra.config import (
+    DATA_DIR,
+    PLAYGROUND_DIR,
+    LearningConfig,
+    load_learning,
+    load_limits,
+    load_routing,
+)
 from ezra.contracts import (
     ApprovalRecord,
     ApprovalStatus,
     GuardianReview,
+    Lesson,
+    LessonStatus,
     StandardDepartmentResult,
     TaskEnvelope,
     TaskStatus,
 )
 from ezra.gateway import Gateway
 from ezra.intake import IntakeResult, run_intake
+from ezra.learner.curator import retire
+from ezra.learner.loop import LearnOutcome, learn_from_task
+from ezra.learner.retrieval import LessonProvider
 from ezra.pricing import load_pricing
 from ezra.store import Store
+from ezra.trace import Trace, build_trace
 
 DB_PATH = DATA_DIR / "ezra.db"
 CHECKPOINT_PATH = DATA_DIR / "checkpoints.db"
@@ -77,6 +93,45 @@ class RunError(Exception):
     pass
 
 
+TERMINAL = (TaskStatus.DONE, TaskStatus.ESCALATED, TaskStatus.FAILED)
+
+
+def _alive(lease: dict[str, Any]) -> bool:
+    """Is the process that holds this lease still running? Only knowable on this machine;
+    a lease from another host is treated as alive, to be safe."""
+    if lease["host"] != socket.gethostname():
+        return True
+    if lease["pid"] == os.getpid():
+        return False  # our own leftover (e.g. an earlier call in this process)
+    try:
+        os.kill(lease["pid"], 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _check_not_running(store: Store, task_id: str) -> None:
+    lease = store.get_lease(task_id)
+    if lease and _alive(lease):
+        raise RunError(f"Task {task_id} is being worked on right now by process "
+                       f"{lease['pid']} (started {lease['started_at'][:19]}Z). "
+                       "Wait for it to finish.")
+
+
+@contextlib.contextmanager
+def _lease(store: Store, task_id: str):
+    """Mark this process as the one driving the task, for as long as the block runs."""
+    _check_not_running(store, task_id)
+    pid = os.getpid()
+    store.take_lease(task_id, pid, socket.gethostname())
+    try:
+        yield
+    finally:
+        store.release_lease(task_id, pid)
+
+
 @dataclass
 class RunOutcome:
     task_id: str
@@ -88,15 +143,26 @@ class RunOutcome:
     reviews: int  # how many reviews the task got (1, or 2 after a REVISE)
     stopped: list[str]
     spend_usd: float
+    memory: str = "off"
+    learning: LearnOutcome | None = None  # what Ezra learned from this task, if anything
 
 
 def _graph(store: Store, gateway: Gateway, checkpoint_path: Path | str,
-           worktrees_dir: Path | None):
+           worktrees_dir: Path | None, learning: LearningConfig | None = None):
     Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(checkpoint_path), check_same_thread=False)
     ctx = Context(store=store, gateway=gateway, worktrees_dir=worktrees_dir or WORKTREES_DIR,
-                  test_timeout=gateway.limits.test_timeout_seconds)
+                  test_timeout=gateway.limits.test_timeout_seconds,
+                  lessons=LessonProvider(store, learning or load_learning()))
     return build_graph(ctx, SqliteSaver(conn)), conn
+
+
+def _learn_if_finished(store: Store, gateway: Gateway, out: RunOutcome,
+                       learning: LearningConfig) -> RunOutcome:
+    if out.memory == "lessons" and out.outcome in ("passed", "escalated"):
+        out.learning = learn_from_task(store, gateway, out.task_id, learning)
+        out.spend_usd = store.spend_for_task(out.task_id)
+    return out
 
 
 def _outcome(store: Store, app: Any, cfg: dict, task_id: str) -> RunOutcome:
@@ -111,7 +177,8 @@ def _outcome(store: Store, app: Any, cfg: dict, task_id: str) -> RunOutcome:
         result=StandardDepartmentResult.model_validate(result) if result else None,
         review=GuardianReview.model_validate(review) if review else None,
         reviews=len(store.reviews_for_task(task_id)),
-        stopped=values.get("stopped", []), spend_usd=store.spend_for_task(task_id))
+        stopped=values.get("stopped", []), spend_usd=store.spend_for_task(task_id),
+        memory=values.get("memory", "off"))
 
 
 def _drive(app: Any, payload: Any, cfg: dict, on_step: Any) -> None:
@@ -124,9 +191,16 @@ def _drive(app: Any, payload: Any, cfg: dict, on_step: Any) -> None:
 def run_task(store: Store, gateway: Gateway, task_id: str,
              task_budget_usd: float | None = None,
              checkpoint_path: Path | str = CHECKPOINT_PATH,
-             worktrees_dir: Path | None = None, on_step: Any = None) -> RunOutcome:
+             worktrees_dir: Path | None = None, on_step: Any = None,
+             memory: str | None = None,
+             learning: LearningConfig | None = None) -> RunOutcome:
     """Run Code Joe on a created task. `task_budget_usd` can only lower the cap for this run;
-    raising it is the user's decision (an approved HOLD)."""
+    raising it is the user's decision (an approved HOLD). `memory` ("off" or "lessons")
+    overrides config/learning.yaml for this run."""
+    learning = learning or load_learning()
+    memory = memory or learning.memory
+    if memory not in ("off", "lessons"):
+        raise RunError(f"memory must be 'off' or 'lessons', not '{memory}'.")
     found = store.get_task(task_id)
     if found is None:
         raise RunError(f"No task '{task_id}'.")
@@ -138,15 +212,126 @@ def run_task(store: Store, gateway: Gateway, task_id: str,
         if task_budget_usd > cap:
             raise RunError(f"--task-budget can only lower the cap (max ${cap:.2f}).")
         cap = task_budget_usd
+    app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir, learning)
+    cfg = {"configurable": {"thread_id": task_id}}
+    try:
+        with _lease(store, task_id):
+            _drive(app, _start_payload(env, task_id, cap, memory), cfg, on_step)
+        return _learn_if_finished(store, gateway, _outcome(store, app, cfg, task_id),
+                                  learning)
+    finally:
+        conn.close()
+
+
+def _start_payload(env: TaskEnvelope, task_id: str, cap: float,
+                   memory: str = "off") -> dict[str, Any]:
+    return {"task_id": task_id, "task_cap": cap, "daily_cap": env.budget.daily_limit_usd,
+            "budget_extra_task": 0.0, "budget_extra_day": 0.0, "memory": memory}
+
+
+def _resumable(snap: Any) -> bool:
+    """Is there saved work left to run? `next` alone isn't enough: when parallel steps
+    (Builder and Tester) all finished but the process was interrupted before LangGraph
+    committed the step, `next` reads empty while `tasks` still holds their saved results.
+    Found live in M6 with a real Ctrl-C."""
+    return bool(snap.next) or bool(snap.tasks)
+
+
+def resume_task(store: Store, gateway: Gateway, task_id: str,
+                checkpoint_path: Path | str = CHECKPOINT_PATH,
+                worktrees_dir: Path | None = None, on_step: Any = None,
+                learning: LearningConfig | None = None) -> RunOutcome:
+    """Continue a task that was cut off (a crash or Ctrl-C) from its last saved step.
+    The step that was interrupted runs again from its start; finished steps don't.
+    The run keeps the memory setting it started with."""
+    learning = learning or load_learning()
+    found = store.get_task(task_id)
+    if found is None:
+        raise RunError(f"No task '{task_id}'.")
+    env, status = found
+    if status in TERMINAL:
+        raise RunError(f"Task {task_id} is {status}; there's nothing to resume.")
+    _check_not_running(store, task_id)
+    app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir, learning)
+    cfg = {"configurable": {"thread_id": task_id}}
+    try:
+        snap = app.get_state(cfg)
+        if snap.interrupts:
+            ids = ", ".join(i.value.get("approval_id", "?") for i in snap.interrupts)
+            raise RunError(f"Task {task_id} is paused on a budget HOLD ({ids}). Answer it "
+                           "with `ezra approve` or `ezra reject` instead.")
+        if not snap.values:
+            if status is TaskStatus.CREATED:
+                raise RunError(f"Task {task_id} hasn't started yet. Use `ezra run {task_id}`.")
+            payload: Any = _start_payload(env, task_id, env.budget.task_limit_usd,
+                                          learning.memory)
+        elif _resumable(snap):
+            payload = None  # continue from the checkpoint
+        else:
+            raise RunError(f"Task {task_id}'s run already finished but its status is "
+                           f"{status}. Use `ezra abandon {task_id}` to close it.")
+        store.log_event(task_id, "run_resumed",
+                        from_steps=list(snap.next) or [t.name for t in snap.tasks] or ["start"],
+                        status_before=str(status))
+        with _lease(store, task_id):
+            _drive(app, payload, cfg, on_step)
+        return _learn_if_finished(store, gateway, _outcome(store, app, cfg, task_id),
+                                  learning)
+    finally:
+        conn.close()
+
+
+def review_task(store: Store, gateway: Gateway, task_id: str,
+                checkpoint_path: Path | str = CHECKPOINT_PATH,
+                worktrees_dir: Path | None = None, on_step: Any = None) -> RunOutcome:
+    """Give Guardian review to a task that was packaged but never reviewed (tasks run before
+    Guardian existed). Its saved run is attached to the current graph as if `package` had
+    just finished, so the normal path follows: review, then PASS, REVISE or ESCALATE."""
+    found = store.get_task(task_id)
+    if found is None:
+        raise RunError(f"No task '{task_id}'.")
+    _, status = found
+    if status is not TaskStatus.IN_REVIEW:
+        raise RunError(f"Task {task_id} is {status}; only tasks waiting in review "
+                       "can be reviewed.")
+    if store.reviews_for_task(task_id):
+        raise RunError(f"Task {task_id} already has a Guardian review.")
+    _check_not_running(store, task_id)
     app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir)
     cfg = {"configurable": {"thread_id": task_id}}
     try:
-        _drive(app, {"task_id": task_id, "task_cap": cap,
-                     "daily_cap": env.budget.daily_limit_usd, "budget_extra_task": 0.0,
-                     "budget_extra_day": 0.0}, cfg, on_step)
+        snap = app.get_state(cfg)
+        if not snap.values.get("result"):
+            raise RunError(f"Task {task_id} has no packaged result to review.")
+        if _resumable(snap):
+            raise RunError(f"Task {task_id} was cut off mid-run; use "
+                           f"`ezra run {task_id} --resume`.")
+        app.update_state(cfg, None, as_node="package")  # next step: review
+        store.log_event(task_id, "review_requested", reason="packaged before review existed")
+        with _lease(store, task_id):
+            _drive(app, None, cfg, on_step)
         return _outcome(store, app, cfg, task_id)
     finally:
         conn.close()
+
+
+def abandon_task(store: Store, task_id: str, reason: str = "") -> TaskStatus:
+    """Close a stuck task as failed. Its branch and worktree are kept for you to inspect;
+    its pending HOLDs are rejected so they stop showing up."""
+    found = store.get_task(task_id)
+    if found is None:
+        raise RunError(f"No task '{task_id}'.")
+    _, status = found
+    if status in TERMINAL:
+        raise RunError(f"Task {task_id} is already {status}.")
+    _check_not_running(store, task_id)
+    for a in store.approvals_for_task(task_id):
+        if a.status is ApprovalStatus.PENDING:
+            store.resolve_approval(a.approval_id, False, "task abandoned")
+    store.set_task_status(task_id, TaskStatus.FAILED)
+    store.log_event(task_id, "abandoned", status_before=str(status),
+                    reason=reason or "abandoned by the user")
+    return status
 
 
 def default_extension(approval: ApprovalRecord) -> float:
@@ -163,8 +348,10 @@ def default_extension(approval: ApprovalRecord) -> float:
 def answer_hold(store: Store, gateway: Gateway, approval_id: str, approved: bool,
                 extend_usd: float | None = None, note: str | None = None,
                 checkpoint_path: Path | str = CHECKPOINT_PATH,
-                worktrees_dir: Path | None = None, on_step: Any = None) -> RunOutcome:
+                worktrees_dir: Path | None = None, on_step: Any = None,
+                learning: LearningConfig | None = None) -> RunOutcome:
     """Approve or reject a HOLD and resume the paused task (D-009 Level 1)."""
+    learning = learning or load_learning()
     approval = store.get_approval(approval_id)
     if approval is None:
         raise RunError(f"No approval '{approval_id}'.")
@@ -175,8 +362,9 @@ def answer_hold(store: Store, gateway: Gateway, approval_id: str, approved: bool
         store.resolve_approval(approval_id, approved, note)
         raise RunError("That HOLD came from `ezra ask`; there's no task to resume. "
                        "Run the request again.")
+    _check_not_running(store, approval.task_id)
     extend = default_extension(approval) if extend_usd is None else extend_usd
-    app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir)
+    app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir, learning)
     cfg = {"configurable": {"thread_id": approval.task_id}}
     try:
         snap = app.get_state(cfg)
@@ -188,8 +376,17 @@ def answer_hold(store: Store, gateway: Gateway, approval_id: str, approved: bool
                                extra_details={"extend_usd": extend if approved else 0.0})
         store.log_event(approval.task_id, "hold_answered", approval_id=approval_id,
                         approved=approved, extend_usd=extend if approved else 0.0)
-        _drive(app, Command(resume={match[0].id: {"approved": approved,
-                                                  "extend_usd": extend}}), cfg, on_step)
-        return _outcome(store, app, cfg, approval.task_id)
+        with _lease(store, approval.task_id):
+            _drive(app, Command(resume={match[0].id: {"approved": approved,
+                                                      "extend_usd": extend}}), cfg, on_step)
+        return _learn_if_finished(store, gateway, _outcome(store, app, cfg, approval.task_id),
+                                  learning)
     finally:
         conn.close()
+
+
+        with _lease(store, approval.task_id):
+            _drive(app, Command(resume={match[0].id: {"approved": approved,
+                                                      "extend_usd": extend}}), cfg, on_step)
+        return _learn_if_finished(store, gateway, _outcome(store, app, cfg, approval.task_id),
+                                  learning)

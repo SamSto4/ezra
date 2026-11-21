@@ -329,6 +329,15 @@ class GuardianReview(_Model):
 # ---------------------------------------------------------------------------
 
 
+class ContextRef(_Model):
+    """One labelled piece of context injected into a call (for later attribution, D-012).
+    The full text lives in the store's text table, keyed by `sha`."""
+
+    label: str
+    chars: int
+    sha: str
+
+
 class ModelInvocation(_Model):
     invocation_id: str = Field(default_factory=lambda: new_id("inv"))
     task_id: str | None
@@ -354,6 +363,16 @@ class ModelInvocation(_Model):
     fallback_used: bool = False
     stop_reason: str | None = None
     request_id: str | None = None
+    # Attribution (M6): which prompt version and which injected context this call used.
+    # Hashes point into the store's text table, where the full text is kept (locally only).
+    prompt_name: str = ""
+    prompt_version: str = ""  # "<name>@<first 10 hex of sha256(system prompt)>"
+    context: list[ContextRef] = Field(default_factory=list)
+    message_hashes: list[str] = Field(default_factory=list)
+    response_hash: str | None = None
+    # Lesson ids carried in the prompt (progressive learning, D-012), so a lesson's effect
+    # can be traced to the calls that carried it.
+    context_refs: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -380,3 +399,49 @@ class ApprovalRecord(_Model):
     response: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     resolved_at: datetime | None = None
+
+
+# ---------------------------------------------------------------------------
+# Lessons: progressive learning (D-012 goal 3, docs/research/progressive-learning.md §4)
+# ---------------------------------------------------------------------------
+
+
+class LessonKind(StrEnum):
+    STRATEGY = "strategy"  # a way of working that led to success
+    PITFALL = "pitfall"  # a mistake Guardian or the checks caught
+    CHECK = "check"  # something to verify before finishing
+
+
+class LessonStatus(StrEnum):
+    ACTIVE = "active"  # retrieved into prompts
+    RETIRED = "retired"  # kept for history, never retrieved
+
+
+class LessonSource(StrEnum):
+    INFERRED = "inferred"  # distilled by the Reflector from a judged outcome
+    CONFIRMED = "confirmed"  # the user confirmed it (becomes a Standard in Phase 3)
+
+
+class Lesson(_Model):
+    """One short, reusable lesson. Itemized and updated by small deltas, never rewritten as
+    a whole playbook (ACE). Every change is a new version in the lesson history."""
+
+    lesson_id: str = Field(default_factory=lambda: new_id("les"))
+    operation: str  # the prompt it goes into, e.g. "builder.implement"
+    project: str | None = None  # None = any project
+    kind: LessonKind
+    trigger: str  # when it applies
+    text: str  # the lesson itself, one or two sentences
+    evidence: list[str] = Field(default_factory=list)  # task ids that taught or reinforced it
+    source: LessonSource = LessonSource.INFERRED
+    status: LessonStatus = LessonStatus.ACTIVE
+    helpful: int = 0
+    harmful: int = 0
+    uses: int = 0  # tasks it was injected into
+    version: int = 1
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+    @property
+    def score(self) -> int:
+        return self.helpful - self.harmful

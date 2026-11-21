@@ -7,6 +7,7 @@ Secrets never go in here: callers pass contracts, and contracts carry no credent
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
 import sqlite3
 import threading
@@ -18,6 +19,8 @@ from ezra.contracts import (
     ApprovalRecord,
     ApprovalStatus,
     GuardianReview,
+    Lesson,
+    LessonStatus,
     ModelInvocation,
     StandardDepartmentResult,
     TaskEnvelope,
@@ -89,12 +92,54 @@ CREATE TABLE IF NOT EXISTS approval_records (
     record      TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_approvals_status ON approval_records(status);
+CREATE TABLE IF NOT EXISTS run_leases (
+    task_id     TEXT PRIMARY KEY,
+    pid         INTEGER NOT NULL,
+    host        TEXT NOT NULL,
+    started_at  TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS texts (
+    sha         TEXT PRIMARY KEY,
+    created_at  TEXT NOT NULL,
+    text        TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS lessons (
+    lesson_id   TEXT PRIMARY KEY,
+    operation   TEXT NOT NULL,
+    project     TEXT,
+    status      TEXT NOT NULL,
+    updated_at  TEXT NOT NULL,
+    record      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lessons_op ON lessons(operation, status);
+CREATE TABLE IF NOT EXISTS lesson_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    lesson_id   TEXT NOT NULL,
+    version     INTEGER NOT NULL,
+    action      TEXT NOT NULL,
+    task_id     TEXT,
+    reason      TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    record      TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lesson_history ON lesson_history(lesson_id);
+CREATE TABLE IF NOT EXISTS lesson_uses (
+    task_id     TEXT NOT NULL,
+    lesson_id   TEXT NOT NULL,
+    operation   TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (task_id, lesson_id, operation)
+);
 """
 
 
 def _ts(dt: datetime | None = None) -> str:
     # Fixed-width UTC text, so string comparison in SQL matches time order.
     return (dt or utcnow()).astimezone(UTC).isoformat(timespec="microseconds")
+
+
+def text_sha(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _locked(method):
@@ -232,6 +277,47 @@ class Store(metaclass=_ThreadSafe):
         ).fetchall()
         return [GuardianReview.model_validate_json(r["record"]) for r in rows]
 
+    # -- run leases (M6) --------------------------------------------------------
+    # Which process is driving a task right now. A crash leaves the row behind with a dead
+    # pid, which is how `ezra run --resume` tells a stuck task from one that's still going.
+
+    def get_lease(self, task_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT pid, host, started_at FROM run_leases WHERE task_id=?",
+                                (task_id,)).fetchone()
+        return dict(row) if row else None
+
+    def take_lease(self, task_id: str, pid: int, host: str) -> None:
+        with self.conn:
+            self.conn.execute("INSERT OR REPLACE INTO run_leases (task_id, pid, host, "
+                              "started_at) VALUES (?, ?, ?, ?)", (task_id, pid, host, _ts()))
+
+    def release_lease(self, task_id: str, pid: int) -> None:
+        with self.conn:
+            self.conn.execute("DELETE FROM run_leases WHERE task_id=? AND pid=?",
+                              (task_id, pid))
+
+    # -- texts (M6 attribution) -------------------------------------------------
+    # Full prompt, context and reply text, stored once per distinct content and referenced
+    # by sha256 from invocation records. Lives only in the local, gitignored database.
+
+    def put_text(self, text: str) -> str:
+        sha = text_sha(text)
+        with self.conn:
+            self.conn.execute("INSERT OR IGNORE INTO texts (sha, created_at, text) "
+                              "VALUES (?, ?, ?)", (sha, _ts(), text))
+        return sha
+
+    def get_text(self, sha: str) -> str | None:
+        """Full hash, or a unique prefix of at least 8 hex characters."""
+        if len(sha) < 64:
+            if len(sha) < 8 or any(c not in "0123456789abcdef" for c in sha):
+                return None
+            rows = self.conn.execute("SELECT text FROM texts WHERE sha >= ? AND sha < ? "
+                                     "LIMIT 2", (sha, sha + "g")).fetchall()
+            return rows[0]["text"] if len(rows) == 1 else None
+        row = self.conn.execute("SELECT text FROM texts WHERE sha = ?", (sha,)).fetchone()
+        return row["text"] if row else None
+
     # -- trace events --------------------------------------------------------
 
     def log_event(self, task_id: str | None, kind: str, **data: Any) -> None:
@@ -297,3 +383,67 @@ class Store(metaclass=_ThreadSafe):
                 (rec.status, rec.model_dump_json(), approval_id),
             )
         return rec
+
+    # -- lessons: progressive learning (D-012) -------------------------------
+
+    def save_lesson(self, lesson: Lesson, action: str, task_id: str | None = None,
+                    reason: str = "") -> None:
+        """Upsert the lesson and append its new version to the history. The history is
+        append-only, so every past state of the playbook can be rebuilt."""
+        with self.conn:
+            self.conn.execute(
+                """INSERT INTO lessons (lesson_id, operation, project, status, updated_at,
+                                        record) VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(lesson_id) DO UPDATE SET status=excluded.status,
+                     updated_at=excluded.updated_at, record=excluded.record""",
+                (lesson.lesson_id, lesson.operation, lesson.project, lesson.status,
+                 _ts(lesson.updated_at), lesson.model_dump_json()),
+            )
+            self.conn.execute(
+                """INSERT INTO lesson_history (lesson_id, version, action, task_id, reason,
+                                               created_at, record)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (lesson.lesson_id, lesson.version, action, task_id, reason, _ts(),
+                 lesson.model_dump_json()),
+            )
+
+    def get_lesson(self, lesson_id: str) -> Lesson | None:
+        row = self.conn.execute(
+            "SELECT record FROM lessons WHERE lesson_id=?", (lesson_id,)).fetchone()
+        return Lesson.model_validate_json(row["record"]) if row else None
+
+    def lessons(self, status: LessonStatus | None = None,
+                operation: str | None = None) -> list[Lesson]:
+        sql, args = "SELECT record FROM lessons WHERE 1=1", []
+        if status is not None:
+            sql += " AND status=?"
+            args.append(status)
+        if operation is not None:
+            sql += " AND operation=?"
+            args.append(operation)
+        rows = self.conn.execute(sql + " ORDER BY lesson_id", args).fetchall()
+        return [Lesson.model_validate_json(r["record"]) for r in rows]
+
+    def lesson_history(self, lesson_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT version, action, task_id, reason, created_at FROM lesson_history "
+            "WHERE lesson_id=? ORDER BY id", (lesson_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def record_lesson_use(self, task_id: str, lesson_id: str, operation: str) -> None:
+        with self.conn:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO lesson_uses VALUES (?, ?, ?, ?)",
+                (task_id, lesson_id, operation, _ts()))
+
+    def lessons_used_by_task(self, task_id: str) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT DISTINCT lesson_id FROM lesson_uses WHERE task_id=? ORDER BY lesson_id",
+            (task_id,)).fetchall()
+        return [r["lesson_id"] for r in rows]
+
+    def has_event(self, task_id: str, kind: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM events WHERE task_id=? AND kind=? LIMIT 1", (task_id, kind)
+        ).fetchone()
+        return row is not None

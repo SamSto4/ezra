@@ -6,9 +6,12 @@ Every call goes through `Gateway.call()`, which:
    and on a breach stores a pending approval and raises BudgetHold without calling the model,
 3. sends the request with adaptive thinking, effort, system-prompt caching and server-side
    refusal fallbacks, letting the SDK do the bounded infrastructure retries (D-004),
-4. writes exactly one ModelInvocation row (success or failure) plus start/finish events.
+4. writes exactly one ModelInvocation row (success or failure) plus start/finish events,
+5. records attribution (M6): the prompt version, the labelled context pieces, and the full
+   text of the system prompt, messages and reply in the local store's text table, each kept
+   once per distinct content. That table stays in the gitignored database.
 
-Nothing here ever logs the API key or the raw request.
+Nothing here ever logs the API key or request headers.
 """
 
 from __future__ import annotations
@@ -25,7 +28,7 @@ from typing import Any
 import anthropic
 
 from ezra.config import RoutingTable
-from ezra.contracts import ApprovalRecord, Department, Limits, ModelInvocation
+from ezra.contracts import ApprovalRecord, ContextRef, Department, Limits, ModelInvocation
 from ezra.pricing import PriceTable
 from ezra.store import Store
 
@@ -108,14 +111,25 @@ class Gateway:
              output_format: dict[str, Any] | None = None,
              tools: list[dict[str, Any]] | None = None, cache_conversation: bool = False,
              task_budget_usd: float | None = None, daily_budget_usd: float | None = None,
-             approval_id: str | None = None, persist_hold: bool = True) -> GatewayResponse:
+             approval_id: str | None = None, persist_hold: bool = True,
+             prompt_name: str | None = None,
+             context: list[tuple[str, str]] | None = None,
+             system_context: str | None = None,
+             context_refs: list[str] | None = None) -> GatewayResponse:
         """One model call. Optional knobs:
         - tools: client tools for an agent loop (the caller runs them).
         - cache_conversation: also cache the conversation so far, for loops whose history
           grows every turn.
         - task_budget_usd / daily_budget_usd: caps for this call (default: config/limits.yaml).
         - approval_id / persist_hold: a HOLD's id, and whether the Gateway saves it. A graph
-          step that may rerun passes a stable id and saves the approval itself."""
+          step that may rerun passes a stable id and saves the approval itself.
+        - prompt_name / context: attribution. The prompt name defaults to the operation; the
+          version adds a fingerprint of the system prompt, so a wording change shows up.
+          context is (label, text) pairs for what the caller injected into the message.
+        - system_context / context_refs: extra system text (retrieved lessons, D-012) sent as
+          a second cached block after the static prompt, and the lesson ids it came from,
+          logged on the invocation. It's part of the counted input, so the budget check,
+          fit and HOLD cover it, and it's attributed as context labelled "lessons"."""
         route = self.routing.route(operation)
         output_config: dict[str, Any] = {"effort": route.effort}
         if output_format is not None:
@@ -123,6 +137,10 @@ class Gateway:
         # Static system prompt marked for caching. Prompts under the model's minimum
         # (512 tokens) simply don't cache; that costs nothing extra.
         system_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        if system_context:
+            # Its own breakpoint: the static prompt still caches when the lessons change.
+            system_blocks.append({"type": "text", "text": system_context,
+                                  "cache_control": {"type": "ephemeral"}})
         shared = dict(model=route.model, system=system_blocks, messages=messages,
                       thinking={"type": "adaptive"}, output_config=output_config,
                       betas=[FALLBACK_BETA])
@@ -149,21 +167,38 @@ class Gateway:
                                  requested_max_tokens=requested, max_tokens=max_tokens,
                                  effort=output_config["effort"], worst_case_usd=round(worst, 6))
         try:
+            pieces = list(context or [])
+            if system_context:
+                pieces.append(("lessons", system_context))
+            attribution = self._attribution(prompt_name or operation, system, messages,
+                                            pieces)
+            attribution["context_refs"] = list(context_refs or [])
             return self._call_reserved(shared, route, operation, department, task_id,
-                                       input_tokens, max_tokens, worst)
+                                       input_tokens, max_tokens, worst, attribution)
         finally:
             self._release(task_id, worst)
 
+    def _attribution(self, name: str, system: str, messages: list[dict[str, Any]],
+                     context: list[tuple[str, str]] | None) -> dict[str, Any]:
+        system_sha = self.store.put_text(system)
+        return dict(
+            prompt_name=name, prompt_version=f"{name}@{system_sha[:10]}",
+            context=[ContextRef(label=label, chars=len(text), sha=self.store.put_text(text))
+                     for label, text in (context or [])],
+            message_hashes=[self.store.put_text(_to_json(m)) for m in messages])
+
     def _call_reserved(self, shared, route, operation, department, task_id, input_tokens,
-                       max_tokens, worst) -> GatewayResponse:
+                       max_tokens, worst, attribution) -> GatewayResponse:
 
         self.store.log_event(task_id, "model_call_started", operation=operation,
                              department=str(department), model=route.model,
+                             prompt_version=attribution["prompt_version"],
                              effort=route.effort, counted_input_tokens=input_tokens,
                              max_tokens=max_tokens, worst_case_usd=round(worst, 6))
         base = dict(task_id=task_id, operation_id=operation, department=department,
                     operation_type=operation.split(".", 1)[-1], requested_model=route.model,
-                    routing_policy_version=self.routing.version, estimated_cost_usd=worst)
+                    routing_policy_version=self.routing.version, estimated_cost_usd=worst,
+                    **attribution)
         started = time.monotonic()
         message, request_id = None, None
         try:
@@ -183,6 +218,10 @@ class Gateway:
                 raise GatewayError(f"{operation} failed: {inv.failure_reason}", inv) from exc
             raise
 
+        try:
+            base["response_hash"] = self.store.put_text(_to_json(list(message.content)))
+        except Exception as exc:  # the call is billed: never lose its invocation row
+            self.store.log_event(task_id, "attribution_failed", error=type(exc).__name__)
         inv = self._invocation_from(message, base, started, request_id)
         self._finish(inv)
         if message.stop_reason == "refusal":
@@ -322,6 +361,15 @@ class Gateway:
                              input_tokens=inv.input_tokens, output_tokens=inv.output_tokens,
                              cache_read_tokens=inv.cache_read_tokens,
                              cost_usd=inv.actual_cost_usd, latency_ms=inv.latency_ms)
+
+
+def _to_json(obj: Any) -> str:
+    """Stable JSON for a message or content list; SDK objects are dumped to plain dicts."""
+    def default(o: Any) -> Any:
+        if hasattr(o, "model_dump"):
+            return o.model_dump(mode="json", exclude_none=True)
+        return str(o)
+    return json.dumps(obj, default=default, sort_keys=True, ensure_ascii=False)
 
 
 def _ms(started: float) -> int:

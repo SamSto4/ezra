@@ -1,0 +1,33 @@
+id: h10_analyze_refactor
+category: refactor
+split: heldout
+section: plan
+difficulty: hard
+description: 'minitext/stats.py walks the text once per statistic. Add analyze(text), which computes
+  every statistic in a single pass into a TextStats dataclass, and rebuild the four existing functions
+  on top of it without changing a single result.'
+criteria:
+- id: AC1
+  text: minitext.stats.analyze(text) returns a frozen dataclass TextStats with fields vowels, consonants,
+    words, letters_in_words, longest_word
+  severity: critical
+  verification: test
+- id: AC2
+  text: analyze looks at each character of text at most once (one pass; no str.split, no second loop
+    over the text)
+  severity: major
+  verification: inspection
+- id: AC3
+  text: count_vowels, count_consonants, average_word_length and longest_word each call analyze and
+    return exactly what they returned before for every input, including the ZeroDivisionError that
+    average_word_length raises on empty text and the first-longest-word-wins tie rule
+  severity: critical
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies
+- Don't change minitext/core.py

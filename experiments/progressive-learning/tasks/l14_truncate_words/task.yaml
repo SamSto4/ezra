@@ -1,0 +1,30 @@
+id: l14_truncate_words
+category: bug_fix
+split: learn
+section: test
+difficulty: hard
+description: truncate in minitext/core.py can return more than width characters and cuts words in
+  half. Fix it so it cuts cleanly at a word boundary.
+criteria:
+- id: AC1
+  text: The result is never longer than width characters, "..." included
+  severity: critical
+  verification: test
+- id: AC2
+  text: When text has to be cut, the result ends with "..." and the kept part ends at the end of a whole
+    word with no trailing whitespace or punctuation like "," or ";" before the "..."; if not even one
+    word fits, the first word is hard-cut so the whole result is still width characters
+  severity: critical
+  verification: test
+- id: AC3
+  text: Text that already fits is returned unchanged; width below 3 returns the first width characters
+    with no "..."; a negative width raises ValueError
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

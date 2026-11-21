@@ -1,0 +1,37 @@
+id: h11_csv_quoting
+category: edge_case
+split: heldout
+section: build
+difficulty: hard
+description: minitext/csvlite.py breaks on real CSV. Fields with commas or quotes in them get split or
+  corrupted, and Windows line endings leave a stray carriage return. Make parse_line and format_line
+  handle quoting the standard CSV way.
+criteria:
+- id: AC1
+  text: parse_line accepts fields wrapped in double quotes, which may contain commas, and "" inside a
+    quoted field means one literal double quote
+  severity: critical
+  verification: test
+- id: AC2
+  text: parse_line removes a trailing "\n" or "\r\n"; an unterminated quoted field, or text between a
+    closing quote and the next comma, raises ValueError
+  severity: major
+  verification: test
+- id: AC3
+  text: format_line wraps a field in double quotes (doubling any quotes inside) exactly when it contains
+    a comma, a double quote, "\r" or "\n", or starts or ends with a space; other fields are written as
+    str(field)
+  severity: critical
+  verification: test
+- id: AC4
+  text: parse_line(format_line(fields)) == [str(f) for f in fields] for any list of fields without
+    newlines
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- Don't use the csv module or any other dependency

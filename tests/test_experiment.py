@@ -33,6 +33,12 @@ def test_every_section_has_learn_and_heldout_tasks():
         assert splits.count("learn") >= 2 and splits.count("heldout") >= 2, section
 
 
+def test_every_section_has_hard_learn_and_heldout_tasks():
+    for section in ex.SECTIONS:
+        splits = [t.split for t in TASKS if t.section == section and t.difficulty == "hard"]
+        assert splits.count("learn") >= 2 and splits.count("heldout") >= 2, section
+
+
 @pytest.mark.parametrize("task", TASKS, ids=lambda t: t.id)
 def test_every_task_is_fair(task, tmp_path):
     check = ex.validate_task(task, tmp_path)
@@ -164,7 +170,7 @@ def test_cli_cap_covers_the_whole_command(monkeypatch, capsys):
     from ezra import cli
     caps = []
 
-    def fake_run_arm(arm, run, tasks, max_usd, on_task=None):
+    def fake_run_arm(arm, run, tasks, max_usd, on_task=None, out_dir=None):
         caps.append(round(max_usd, 2))
         return [ex.Row(arm=arm, run=run, task="t", category="bug_fix", split="learn",
                        section="test", memory="off", task_id="x", outcome="passed",

@@ -1,0 +1,39 @@
+id: l10_durations
+category: new_function
+split: learn
+section: plan
+difficulty: hard
+description: 'Add a minitext/duration.py module with parse_duration(text) and format_duration(seconds)
+  for human-friendly durations like "1h30m".'
+criteria:
+- id: AC1
+  text: parse_duration returns the number of seconds as an int for text made of one or more number+unit
+    parts, with units d, h, m and s (case-insensitive), in that order, optionally separated by spaces,
+    for example "1h30m", "2h 15m", "90s", "1D"
+  severity: critical
+  verification: test
+- id: AC2
+  text: A part may have a decimal number such as "1.5h"; the total is rounded to the nearest second
+  severity: major
+  verification: test
+- id: AC3
+  text: Empty text, an unknown unit, a unit used twice, units out of order or anything else that isn't
+    a valid duration raises ValueError
+  severity: major
+  verification: test
+- id: AC4
+  text: format_duration(seconds) returns the shortest canonical form, largest unit first and zero parts
+    left out ("1h1m1s", "1d", "0s" for zero); negative seconds raise ValueError
+  severity: major
+  verification: test
+- id: AC5
+  text: parse_duration(format_duration(n)) == n for every non-negative int n
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

@@ -1,0 +1,31 @@
+id: l15_doctest_modules
+category: docs
+split: learn
+section: review
+difficulty: hard
+description: 'Document minitext/template.py, table.py, csvlite.py and slug.py: give every function
+  a docstring with runnable doctest examples that show how it behaves today, quirks included. This is
+  a documentation task: do not change any code.'
+criteria:
+- id: AC1
+  text: Every function in the four modules has a docstring with at least one doctest example (">>> ...")
+  severity: major
+  verification: inspection
+- id: AC2
+  text: All the examples pass when run with python -m doctest on each module, and each example shows
+    the function's current output, including surprising behavior (for example what slugify does with
+    accents or repeated spaces)
+  severity: critical
+  verification: inspection
+- id: AC3
+  text: Apart from docstrings, the four modules are unchanged; no function's behavior changes
+  severity: critical
+  verification: inspection
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies
+- Docstrings only

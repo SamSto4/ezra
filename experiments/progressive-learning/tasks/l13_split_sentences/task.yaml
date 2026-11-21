@@ -1,0 +1,34 @@
+id: l13_split_sentences
+category: new_function
+split: learn
+section: test
+difficulty: hard
+description: Add split_sentences(text) to minitext/core.py, which splits prose into sentences. It
+  must cope with the usual traps (abbreviations, decimals, ellipses, quotes).
+criteria:
+- id: AC1
+  text: split_sentences(text) is importable from minitext.core and returns a list of sentences, each
+    stripped of surrounding whitespace; empty or whitespace-only text gives []
+  severity: critical
+  verification: test
+- id: AC2
+  text: A sentence ends at ".", "!" or "?" (or a run of them, like "?!" or "...") followed by whitespace
+    or the end of the text; closing quotes or brackets right after the punctuation stay with that sentence
+  severity: critical
+  verification: test
+- id: AC3
+  text: 'A period does not end a sentence inside a number ("3.14"), or after these abbreviations: Mr,
+    Mrs, Ms, Dr, Prof, St, vs, etc, e.g, i.e (case-insensitive)'
+  severity: major
+  verification: test
+- id: AC4
+  text: Text after the last sentence end with no final punctuation is still returned as a last sentence
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

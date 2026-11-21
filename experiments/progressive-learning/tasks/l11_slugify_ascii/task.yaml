@@ -1,0 +1,32 @@
+id: l11_slugify_ascii
+category: bug_fix
+split: learn
+section: build
+difficulty: hard
+description: slugify in minitext/slug.py makes bad URL slugs. It keeps accented letters, turns
+  repeated spaces into repeated hyphens, glues words joined by punctuation together and can start or
+  end with a hyphen. Fix it, and add an optional max_length.
+criteria:
+- id: AC1
+  text: Accented Latin letters become their plain ASCII letter ("Café" -> "cafe", "Ærø" may drop letters
+    that have no ASCII form), and the result only ever contains a-z, 0-9 and "-"
+  severity: critical
+  verification: test
+- id: AC2
+  text: Any run of characters that aren't letters or digits (spaces, punctuation, symbols, tabs) becomes
+    a single hyphen, and there is never a hyphen at the start or end
+  severity: critical
+  verification: test
+- id: AC3
+  text: slugify(text, max_length=None) - when max_length is given, the slug is cut to at most that many
+    characters at a hyphen boundary if one exists in range (otherwise hard-cut), and never ends with a
+    hyphen
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- Standard library only

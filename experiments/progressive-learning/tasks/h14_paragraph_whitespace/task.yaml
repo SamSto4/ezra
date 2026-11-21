@@ -1,0 +1,31 @@
+id: h14_paragraph_whitespace
+category: edge_case
+split: heldout
+section: test
+difficulty: hard
+description: normalize_whitespace in minitext/core.py leaves invisible zero-width characters in place
+  and flattens paragraphs into one line. Handle both, without changing what existing callers get.
+criteria:
+- id: AC1
+  text: Zero-width space (U+200B), zero-width non-joiner (U+200C), zero-width joiner (U+200D) and the
+    byte order mark (U+FEFF) are removed entirely (they never become a space)
+  severity: major
+  verification: test
+- id: AC2
+  text: normalize_whitespace(text, keep_paragraphs=False) - with the default, the result is exactly what
+    it was before for any text without those characters
+  severity: critical
+  verification: test
+- id: AC3
+  text: With keep_paragraphs=True, paragraphs (separated by one or more blank or whitespace-only lines,
+    with "\n" or "\r\n" line endings) are each collapsed to single spaces and joined with exactly one
+    blank line ("\n\n"); there is no leading or trailing whitespace
+  severity: critical
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

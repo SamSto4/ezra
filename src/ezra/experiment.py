@@ -50,6 +50,9 @@ CATEGORIES = ("new_function", "bug_fix", "docs", "edge_case", "refactor")
 # Pilot sections: the stage of Code Joe a task is built to stress (plan -> build -> test -> review).
 # A label for reporting only: every arm runs every section the same way.
 SECTIONS = ("plan", "build", "test", "review")
+# Task sets by difficulty: "easy" is the first set (pilot 1, where every arm hit 100%); "hard" is
+# built so the control setup fails some of the time, which the lessons loop needs to learn anything.
+DIFFICULTIES = ("easy", "hard")
 # Measured in M4/M5: a coding task costs about $0.05-0.07; a reflection about $0.005-0.01.
 TASK_COST_RANGE = (0.05, 0.10)
 REFLECT_COST = 0.01
@@ -81,6 +84,7 @@ class TaskSpec:
     criteria: list[AcceptanceCriterion]
     constraints: list[str]
     path: Path
+    difficulty: str = "easy"
 
     @property
     def hidden_tests(self) -> list[Path]:
@@ -98,11 +102,12 @@ def load_tasks(base: Path = EXPERIMENT_DIR) -> list[TaskSpec]:
             continue
         meta = yaml.safe_load((tdir / "task.yaml").read_text())
         if (meta["split"] not in SPLITS or meta["category"] not in CATEGORIES
-                or meta.get("section") not in SECTIONS):
-            raise ValueError(f"{tdir.name}: bad split, category or section")
+                or meta.get("section") not in SECTIONS
+                or meta.get("difficulty", "easy") not in DIFFICULTIES):
+            raise ValueError(f"{tdir.name}: bad split, category, section or difficulty")
         tasks.append(TaskSpec(
             id=meta["id"], category=meta["category"], split=meta["split"],
-            section=meta["section"],
+            section=meta["section"], difficulty=meta.get("difficulty", "easy"),
             description=meta["description"],
             criteria=[AcceptanceCriterion.model_validate(c) for c in meta["criteria"]],
             constraints=meta.get("constraints", []), path=tdir))
@@ -247,6 +252,7 @@ class Row:
     lessons_used: list[str]
     lessons_added: list[str]
     error: str | None = None
+    difficulty: str = "easy"
 
 
 def run_arm(arm_name: str, run: int, tasks: list[TaskSpec], max_usd: float,
@@ -294,7 +300,8 @@ def run_arm(arm_name: str, run: int, tasks: list[TaskSpec], max_usd: float,
             spent += cost
             row = Row(
                 arm=arm_name, run=run, task=task.id, category=task.category,
-                split=task.split, section=task.section, memory=memory, task_id=env.task_id,
+                split=task.split, section=task.section, difficulty=task.difficulty,
+                memory=memory, task_id=env.task_id,
                 outcome=out.outcome if out else "error",
                 verdict=str(out.review.verdict) if out and out.review else None,
                 reviews=out.reviews if out else 0,

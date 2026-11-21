@@ -1,0 +1,35 @@
+id: h09_table_class
+category: refactor
+split: heldout
+section: plan
+difficulty: hard
+description: Turn minitext/table.py into a Table class that collects rows and renders them, with
+  optional per-column alignment. format_table must stay as a thin wrapper and print exactly what it
+  prints today.
+criteria:
+- id: AC1
+  text: Table(headers, align=None) has add_row(cells) and render(); str(table) equals table.render()
+  severity: critical
+  verification: test
+- id: AC2
+  text: align is an optional list with one entry per column, each "left" or "right"; right-aligned
+    columns pad on the left, including the header; the default is all left
+  severity: major
+  verification: test
+- id: AC3
+  text: add_row raises ValueError if the row doesn't have one cell per header, and the Table is left
+    unchanged
+  severity: major
+  verification: test
+- id: AC4
+  text: format_table(rows, headers) uses Table and returns exactly the same text as before for every
+    input, including trailing-space trimming
+  severity: critical
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

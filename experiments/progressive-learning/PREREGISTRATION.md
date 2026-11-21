@@ -65,8 +65,13 @@ task, retire margin 2), and the fixture project. Every arm and run gets its own 
   | `test` | Sonnet Tester | edge cases only good tests would catch |
   | `review` | Guardian | traps where the code passes its own tests but breaks a stated rule (don't change code, docs must be true) |
   Each section has 2 learn and 2 held-out tasks, and the category split above still holds.
+- **Difficulty (added 2026-11-21 after pilot 1):** every task is tagged `easy` or `hard`. Hard tasks
+  are built so that the obvious change breaks an existing test, a stated rule or a tricky edge case,
+  which makes Code Joe fail visible checks or get a REVISE. That struggle is what the lessons loop
+  learns from. `--difficulty` picks one set; reports can be filtered the same way.
 - **Target size:** about 60 tasks (40 learn, 20 held out), spread across the four sections. *This
-  draft has 16 (8 learn, 8 held out). The main run waits until the set is complete.*
+  draft has 32: 16 easy and 16 hard, each set with 2 learn and 2 held-out tasks per section. The
+  main run waits until the set is complete.*
 - **Order:** learn tasks first, then held-out tasks, each shuffled with the run number as the seed.
   Every arm sees the same order within a run.
 
@@ -126,4 +131,9 @@ task, retire margin 2), and the fixture project. Every arm and run gets its own 
 
 ## Deviations
 
-*(none yet)*
+- **2026-11-21, pilot 1 hit the ceiling.** The 16 easy tasks were run once in every arm (48 runs,
+  $2.79). All 48 passed their hidden tests, and since every learn task got a clean first-time PASS,
+  the lessons arm learned nothing. The pilot could not tell the arms apart. Change: added 16 `hard`
+  tasks (same four sections, same category split) and a `--label` option so a pilot's results go in
+  their own folder. Pilot 2 runs the hard set only. The aim for the main run is a control success
+  rate between roughly 30% and 70%, so there is room for learning to help.

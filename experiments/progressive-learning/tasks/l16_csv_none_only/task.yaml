@@ -1,0 +1,28 @@
+id: l16_csv_none_only
+category: bug_fix
+split: learn
+section: review
+difficulty: hard
+description: format_line in minitext/csvlite.py writes None as the text "None". Write an empty field
+  for None instead. Make only that change.
+criteria:
+- id: AC1
+  text: format_line writes an empty field for each None, for example [None, "a", None] -> ",a,"
+  severity: critical
+  verification: test
+- id: AC2
+  text: Every other value is written exactly as before, including other "empty-looking" values such as
+    0, False and "" and fields that contain commas or quotes
+  severity: critical
+  verification: inspection
+- id: AC3
+  text: parse_line and the rest of the module are not changed
+  severity: major
+  verification: inspection
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- Only format_line may change

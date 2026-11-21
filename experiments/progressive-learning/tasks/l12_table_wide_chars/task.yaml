@@ -1,0 +1,29 @@
+id: l12_table_wide_chars
+category: bug_fix
+split: learn
+section: build
+difficulty: hard
+description: format_table in minitext/table.py misaligns columns when a cell holds East Asian wide
+  characters (they take two terminal columns) or combining accents (they take none). Make columns line
+  up by display width.
+criteria:
+- id: AC1
+  text: Column widths and padding use display width, where characters whose unicodedata.east_asian_width
+    is "W" or "F" count as 2 and combining marks (unicodedata.combining(ch) != 0) count as 0
+  severity: critical
+  verification: test
+- id: AC2
+  text: The dashed rule under the header is as wide as each column's display width
+  severity: major
+  verification: test
+- id: AC3
+  text: Tables with only ASCII text come out exactly as before
+  severity: critical
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- Standard library only

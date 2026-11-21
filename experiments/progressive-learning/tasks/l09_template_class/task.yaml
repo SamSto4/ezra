@@ -1,0 +1,40 @@
+id: l09_template_class
+category: new_function
+split: learn
+section: plan
+difficulty: hard
+description: 'Grow minitext/template.py into a reusable Template class: parse a template once, render
+  it many times, support literal braces and dotted names, and give clear errors. render() must keep
+  working and get the same features.'
+criteria:
+- id: AC1
+  text: Template(text) can be created once and its render(mapping) method called many times with
+    different values; render(template, context) gives the same result as Template(template).render(context)
+  severity: critical
+  verification: test
+- id: AC2
+  text: '"{{" and "}}" produce literal "{" and "}" and are never treated as fields'
+  severity: major
+  verification: test
+- id: AC3
+  text: '"{a.b}" looks up b inside the value of a, whether that value is a dict (key b) or an object
+    (attribute b), to any depth'
+  severity: major
+  verification: test
+- id: AC4
+  text: A missing name raises KeyError whose message contains the full field name as written (for
+    example "user.email"); an unmatched single "{" or "}" raises ValueError when the Template is created
+  severity: major
+  verification: test
+- id: AC5
+  text: Template has a fields attribute listing each field name once, in order of first appearance
+  severity: minor
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies
+- Keep the code in minitext/template.py

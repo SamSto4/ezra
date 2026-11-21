@@ -1,0 +1,36 @@
+id: h12_smart_title_case
+category: edge_case
+split: heldout
+section: build
+difficulty: hard
+description: title_case in minitext/core.py crashes on empty text and gets real titles wrong. Make
+  it produce proper headline capitalization.
+criteria:
+- id: AC1
+  text: Every whitespace character is kept exactly where it was (spaces, tabs, repeats, leading and
+    trailing), and empty text returns an empty string
+  severity: critical
+  verification: test
+- id: AC2
+  text: 'Only the first letter of each word changes to uppercase: an apostrophe keeps the rest of the
+    word lowercase ("don''t" -> "Don''t"), while each part of a hyphenated word is capitalized
+    ("well-known" -> "Well-Known")'
+  severity: major
+  verification: test
+- id: AC3
+  text: The small words a, an, the, and, but, or, of, in, on, at, to and for stay lowercase, unless they
+    are the first or last word
+  severity: major
+  verification: test
+- id: AC4
+  text: Words already written in all capitals with at least two letters (like NASA or USB) are left as
+    they are, and other letters in a word are not lowercased ("iPhone" -> "IPhone")
+  severity: minor
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

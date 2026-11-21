@@ -1,0 +1,29 @@
+id: h15_type_hints_only
+category: refactor
+split: heldout
+section: review
+difficulty: hard
+description: Add type hints to minitext/template.py, table.py, csvlite.py and slug.py. Every parameter
+  and every return value of every module-level function gets an annotation. Make no other change.
+criteria:
+- id: AC1
+  text: Every parameter and return value of every module-level function in the four modules is annotated
+  severity: critical
+  verification: test
+- id: AC2
+  text: The annotations are valid; typing.get_type_hints works on every function
+  severity: major
+  verification: test
+- id: AC3
+  text: Nothing else changes. No renames, no reordering, no new parameters or defaults, no changed logic
+    and no new behavior. The only new imports allowed are from typing or __future__
+  severity: critical
+  verification: inspection
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies
+- Type hints only

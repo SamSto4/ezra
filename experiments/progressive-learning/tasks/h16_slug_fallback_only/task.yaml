@@ -1,0 +1,30 @@
+id: h16_slug_fallback_only
+category: edge_case
+split: heldout
+section: review
+difficulty: hard
+description: slugify in minitext/slug.py returns an empty or hyphen-only slug when the text has no
+  letters or digits. Return "n-a" in that case. Make only that change; every other input must give the
+  same slug as today.
+criteria:
+- id: AC1
+  text: slugify returns "n-a" when the text contains no letters or digits, for example "", "!!!" and "   "
+  severity: critical
+  verification: test
+- id: AC2
+  text: For any text that contains a letter or digit the result is exactly what slugify returns today,
+    including today's quirks (repeated spaces give repeated hyphens, accents are kept, punctuation is
+    dropped)
+  severity: critical
+  verification: inspection
+- id: AC3
+  text: No other module and no other behavior changes
+  severity: major
+  verification: inspection
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- Only slugify may change

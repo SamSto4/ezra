@@ -404,6 +404,15 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
 
     from ezra import experiment as ex
     tasks = ex.load_tasks()
+    out_dir = ex.RESULTS_DIR / args.label if getattr(args, "label", None) else ex.RESULTS_DIR
+    if getattr(args, "difficulty", None):
+        wanted = args.difficulty.split(",")
+        bad = [x for x in wanted if x not in ex.DIFFICULTIES]
+        if bad:
+            print(f"Unknown difficulty: {', '.join(bad)}. Choose from: "
+                  f"{', '.join(ex.DIFFICULTIES)}", file=sys.stderr)
+            return EXIT_ERROR
+        tasks = [t for t in tasks if t.difficulty in wanted]
     if args.action == "validate":
         bad = 0
         with tempfile.TemporaryDirectory() as tmp:
@@ -411,12 +420,12 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
                 check = ex.validate_task(t, Path(tmp))
                 bad += not check.ok
                 print(f"{'ok  ' if check.ok else 'FAIL'} {t.id} "
-                      f"[{t.section} · {t.split} · {t.category}]"
+                      f"[{t.difficulty} · {t.section} · {t.split} · {t.category}]"
                       + ("" if check.ok else f": {'; '.join(check.problems)}"))
         print(f"{len(tasks) - bad}/{len(tasks)} tasks are fair.")
         return EXIT_OK if not bad else EXIT_ERROR
     if args.action == "report":
-        rows = ex.load_rows()
+        rows = ex.load_rows(out_dir / "results.jsonl")
         if not rows:
             print("No results yet.")
             return EXIT_OK
@@ -473,7 +482,7 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
                     break
                 print(f"Running {arm}, run {run}…", file=sys.stderr)
                 rows = ex.run_arm(arm, run, tasks, max_usd=args.max_usd - spent,
-                                  on_task=lambda r: print(
+                                  out_dir=out_dir, on_task=lambda r: print(
                     f"  {r.task} [{r.section}]: {r.outcome}, hidden "
                     f"{'pass' if r.hidden_pass else 'FAIL'}, ${r.cost_usd:.4f}", file=sys.stderr))
                 spent += sum(r.cost_usd for r in rows)
@@ -549,11 +558,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_les.add_argument("--all", action="store_true", help="Include retired lessons")
     p_ex = sub.add_parser("experiment", help="The progressive learning experiment")
     ex_sub = p_ex.add_subparsers(dest="action", required=True)
-    ex_sub.add_parser("validate", help="Check every task is fair (no model calls)")
-    ex_sub.add_parser("report", help="Summarize the results so far")
-    for name, text in (("estimate", "Estimate the cost of a run (no model calls)"),
+    for name, text in (("validate", "Check every task is fair (no model calls)"),
+                       ("report", "Summarize the results so far"),
+                       ("estimate", "Estimate the cost of a run (no model calls)"),
                        ("run", "Run arms live (spends money; needs --confirm)")):
         p = ex_sub.add_parser(name, help=text)
+        p.add_argument("--difficulty", default=None, help="Comma-separated: easy,hard "
+                       "(default: both)")
+        if name in ("report", "run"):
+            p.add_argument("--label", default=None, help="Keep this run's results in their "
+                           "own folder, e.g. pilot-2 (default: the shared folder)")
+        if name in ("validate", "report"):
+            continue
         p.add_argument("--arms", default=None, help="Comma-separated: control,lessons,"
                        "budget_matched (default: all)")
         p.add_argument("--runs", type=int, default=3, help="Runs per arm (default 3)")

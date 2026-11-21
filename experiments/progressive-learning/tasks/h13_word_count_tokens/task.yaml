@@ -1,0 +1,30 @@
+id: h13_word_count_tokens
+category: edge_case
+split: heldout
+section: test
+difficulty: hard
+description: word_count in minitext/core.py miscounts real text. Repeated or unusual whitespace and
+  stray punctuation are counted as words, and empty text counts as one word. Make it count what a
+  reader would call words.
+criteria:
+- id: AC1
+  text: A word is a run of letters or digits (any script); stand-alone punctuation or symbols such as
+    "-", "...", "&" or emoji are not words, and empty or whitespace-only text has 0 words
+  severity: critical
+  verification: test
+- id: AC2
+  text: An apostrophe (' or ’) or hyphen between two letters or digits joins them into one word ("don't",
+    "rock’n’roll", "e-mail"), and so does a "." or "," between two digits ("3.5", "1,000")
+  severity: major
+  verification: test
+- id: AC3
+  text: All kinds of whitespace separate words, including tabs, newlines and non-breaking spaces
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

@@ -95,19 +95,19 @@ export default function App() {
   const bump = () => setTick((n) => n + 1);
 
   return (
-    <div className="shell">
+    <div className={`shell ${route.view === "agents" ? "wide" : ""}`}>
       <Sidebar route={route} status={status} online={online} />
       <main className="main"><div className="main-inner">
         {route.view === "home" && <Home tasks={tasks} onChange={bump} tick={tick} events={events}
                                          cacheSaved={system?.cache_saved_usd ?? null} />}
         {route.view === "tasks" && <TasksView tasks={tasks} />}
-        {route.view === "agents" && <AgentsView tick={tick} events={events} />}
+        {route.view === "agents" && <AgentsView tick={tick} events={events} onChange={bump} />}
         {route.view === "system" && <SystemView system={system} status={status} />}
         {route.view === "lessons" && <LessonsView tick={tick} onChange={bump} />}
         {route.view === "approvals" && <ApprovalsView tick={tick} onChange={bump} />}
         {route.view === "task" && <TaskView id={route.id} tick={tick} onChange={bump} system={system} />}
       </div></main>
-      <aside className="rail">
+      <aside className="rail" hidden={route.view === "agents"}>
         <ActivityPanel events={events} tasks={tasks} />
       </aside>
     </div>

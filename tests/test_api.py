@@ -140,3 +140,16 @@ def test_learner_and_lessons_endpoints(client):
                   json={"memory": "bogus"}).status_code == 400
     trace_names = {r["operation"] for r in c.get("/api/system").json()["routing"]}
     assert "learner.reflect" in trace_names
+
+
+def test_agent_board_shows_each_agents_status_per_task(client):
+    c, envelope, _ = client
+    before = c.get("/api/agents/board").json()
+    assert before["builder"][0]["state"] == "waiting"  # created, nobody has worked yet
+    c.post(f"/api/tasks/{envelope.task_id}/run", headers=H)
+    wait(c, envelope.task_id)
+    board = c.get("/api/agents/board").json()
+    row = {a: rows[0] for a, rows in board.items()}
+    assert row["builder"]["state"] == "done" and row["builder"]["model"] == "claude-sonnet-5-5"
+    assert row["guardian"]["last_kind"] == "delivered"
+    assert row["learner"]["state"] in ("not_needed", "done")

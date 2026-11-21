@@ -1,27 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentId } from "../agents";
-import { api, usd, type AgentInfo, type AskResult, type EzraEvent, type TaskSummary } from "../api";
+import { api, usd, type AskResult, type EzraEvent, type TaskSummary } from "../api";
 import { Eyebrow, Panel, Star } from "../components/bits";
-import { Orbit } from "../components/Orbit";
+import { taskName, taskSummary } from "../humanize";
 import { busyAgents } from "./AgentsView";
 
 interface Turn { request: string; result?: AskResult; error?: string; started?: boolean }
-
-/** A tiny trend line of cost per passed task, oldest to newest. */
-function Spark({ values }: { values: number[] }) {
-  if (values.length < 2) return null;
-  const max = Math.max(...values), min = Math.min(...values), w = 160, h = 28;
-  const pts = values.map((v, i) => [(i / (values.length - 1)) * (w - 4) + 2,
-    h - 3 - ((v - min) / (max - min || 1)) * (h - 6)]);
-  const last = pts[pts.length - 1];
-  return (
-    <svg className="spark" viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" role="img"
-         aria-label={`Cost per passed task, oldest to newest: ${values.map((v) => `$${v.toFixed(3)}`).join(", ")}`}>
-      <path d={pts.map((p, i) => `${i ? "L" : "M"}${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ")} />
-      <circle cx={last[0]} cy={last[1]} r="2.5" />
-    </svg>
-  );
-}
 
 function greeting() {
   const h = new Date().getHours();
@@ -35,11 +18,9 @@ const QUICK = [
   { label: "Ask a question", sub: "A direct answer from Ezra. No task, no code.", seed: "" },
 ];
 
-export function Home({ tasks, onChange, tick, events, cacheSaved }: {
+export function Home({ tasks, onChange, events }: {
   tasks: TaskSummary[]; onChange: () => void; tick: number; events: EzraEvent[]; cacheSaved: number | null;
 }) {
-  const [agents, setAgents] = useState<AgentInfo[] | null>(null);
-  useEffect(() => { api.agents().then(setAgents).catch(() => setAgents([])); }, [tick]);
   const working = busyAgents(events);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -81,45 +62,16 @@ export function Home({ tasks, onChange, tick, events, cacheSaved }: {
     catch (e) { update(i, { error: String(e).replace(/^Error: /, "") }); }
   }
 
-  const passed = tasks.filter((t) => t.verdict === "PASS");
-  const perTask = passed.length ? passed.reduce((n, t) => n + t.spend_usd, 0) / passed.length : null;
-  const series = [...passed].reverse().map((t) => t.spend_usd); // oldest first
-  const pick = (id: AgentId) => {
-    window.location.hash = "/agents";
-    setTimeout(() => document.getElementById(`agent-${id === "checks" ? "tester" : id}`)
-      ?.scrollIntoView({ block: "start" }), 300);
-  };
 
   return (
     <>
       <div className="hero">
-        <div>
-          <Eyebrow>Ezra · your agent lab</Eyebrow>
-          <h1 className="hello">{greeting()}<em>.</em></h1>
-          <p className="page-sub" style={{ fontSize: 16 }}>Tell Ezra what to build or ask it anything. Watch each
-            agent work, see what it cost, and learn why it decided what it did.</p>
-          <div className="metric-strip">
-            <div className="metric">
-              <Eyebrow dot="var(--accent)">Per successful task</Eyebrow>
-              <div className="stat-value lime" style={{ marginTop: 10 }}>{usd(perTask, 3)}</div>
-              <Spark values={series} />
-            </div>
-            <div className="metric">
-              <Eyebrow dot="var(--success)">Passed</Eyebrow>
-              <div className="stat-value" style={{ marginTop: 10 }}>{passed.length}<span className="muted" style={{ fontSize: 16 }}> / {tasks.length}</span></div>
-            </div>
-            <div className="metric">
-              <Eyebrow>Saved by cache</Eyebrow>
-              <div className="stat-value" style={{ marginTop: 10 }}>{usd(cacheSaved, 3)}</div>
-            </div>
-          </div>
-        </div>
+        <Eyebrow>Ezra</Eyebrow>
+        <h1 className="hello">{greeting()}<em>.</em></h1>
+        <p className="page-sub" style={{ fontSize: 16 }}>What should your agents work on? Ask below, or pick up where they left off.</p>
       </div>
-      <Panel eyebrow={<Eyebrow dot={working.size ? "var(--accent)" : "var(--muted)"}>
-               Ezra and its agents{working.size ? " · live" : ""}</Eyebrow>}
-             right={<a className="small dim" href="#/agents">Open roster →</a>} flat style={{ marginTop: 24 }}>
-        <Orbit agents={agents} busy={working} onPick={pick} />
-      </Panel>
+
+      {!turns.length && <Inbox tasks={tasks} onChange={onChange} working={working.size > 0} />}
 
       {!turns.length && (
         <div className="quick">
@@ -189,5 +141,53 @@ export function Home({ tasks, onChange, tick, events, cacheSaved }: {
         </button>
       </form>
     </>
+  );
+}
+
+
+/** What needs you, what's ready to start, and what's in progress: things you can act on. */
+function Inbox({ tasks, onChange, working }: { tasks: TaskSummary[]; onChange: () => void; working: boolean }) {
+  const needs = tasks.filter((t) => t.status === "held" || t.status === "escalated");
+  const ready = tasks.filter((t) => t.status === "created");
+  const going = tasks.filter((t) => t.status === "running" || t.status === "in_review");
+  const [err, setErr] = useState("");
+  async function start(id: string) {
+    try { await api.run(id); onChange(); } catch (e) { setErr(String(e).replace(/^Error: /, "")); }
+  }
+  const row = (t: TaskSummary, action: React.ReactNode) => (
+    <li key={t.task_id} className="inbox-row">
+      <a href={`#/task/${t.task_id}`} className="inbox-text">
+        <span className="task-name">{taskName(t.title, t.description)}</span>
+        <span className="task-sub">{taskSummary(t.description, t.status, t.verdict)}</span>
+      </a>
+      {action}
+    </li>
+  );
+  return (
+    <div className="inbox">
+      {err && <p className="error">{err}</p>}
+      {!!needs.length && (
+        <Panel title="Needs you" body={false} eyebrow={<Eyebrow dot="var(--warn)">{needs.length} waiting</Eyebrow>}>
+          <ul className="inbox-list">{needs.map((t) => row(t, t.status === "held"
+            ? <a className="btn primary" href="#/approvals">Answer</a>
+            : <a className="btn" href={`#/task/${t.task_id}`}>Take a look</a>))}</ul>
+        </Panel>
+      )}
+      {!!ready.length && (
+        <Panel title="Ready to start" body={false}>
+          <ul className="inbox-list">{ready.map((t) => row(t, <button className="btn primary" onClick={() => start(t.task_id)}>Start</button>))}</ul>
+        </Panel>
+      )}
+      {!!going.length && (
+        <Panel title="In progress" body={false} eyebrow={working ? <Eyebrow dot="var(--accent)">Agents are working</Eyebrow> : undefined}>
+          <ul className="inbox-list">{going.map((t) => row(t, <a className="btn ghost" href={`#/task/${t.task_id}`}>Watch</a>))}</ul>
+        </Panel>
+      )}
+      {!needs.length && !ready.length && !going.length && (
+        <Panel>
+          <p className="dim">Nothing needs you, and nobody's busy. Ask for something below to get your agents going.</p>
+        </Panel>
+      )}
+    </div>
   );
 }

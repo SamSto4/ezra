@@ -98,6 +98,21 @@ export interface AgentInfo {
   memory?: string;
 }
 
+export interface BoardRow {
+  task_id: string;
+  title: string | null;
+  description: string;
+  task_status: string;
+  verdict: string | null;
+  state: "working" | "done" | "needs_attention" | "waiting" | "not_needed";
+  cost_usd: number;
+  model: string | null;
+  last_kind: string | null;
+  last_data: Record<string, unknown>;
+  last_detail: string | null;
+  last_at: string | null;
+}
+
 export interface Lesson {
   lesson_id: string;
   operation: string;
@@ -194,6 +209,7 @@ export const api = {
   text: (sha: string) => call<{ text: string }>(`/api/texts/${sha}`),
   approvals: () => call<Approval[]>("/api/approvals"),
   agents: () => call<AgentInfo[]>("/api/agents"),
+  board: () => call<Record<string, BoardRow[]>>("/api/agents/board"),
   system: () => call<SystemInfo>("/api/system"),
   diff: (id: string) => call<{ branch: string; diff: string; truncated?: boolean; note?: string }>(`/api/tasks/${id}/diff`),
   ask: (request: string) => post<AskResult>("/api/ask", { request }),

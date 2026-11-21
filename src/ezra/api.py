@@ -38,7 +38,7 @@ from ezra.gateway import (
     start_of_local_day,
 )
 from ezra.intake import IntakeError
-from ezra.roster import agent_stats, system_view
+from ezra.roster import agent_board, agent_stats, system_view
 from ezra.store import Store
 from ezra.trace import Trace
 
@@ -196,6 +196,11 @@ def create_app(open_store: Callable[[], Store] = core.open_store,
         text = out.stdout
         return {"branch": branch, "diff": text[:300_000],
                 "truncated": len(text) > 300_000}
+
+    @app.get("/api/agents/board")
+    def board() -> dict[str, Any]:
+        running = {t for t, j in jobs.items() if j.state == "running"}
+        return with_store(lambda s: agent_board(s, running))
 
     @app.get("/api/agents")
     def agents() -> list[dict[str, Any]]:

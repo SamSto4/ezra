@@ -32,8 +32,9 @@ function spoke(x: number, y: number) {
   return `M${CX},${CY} Q${(mx + (nx / len) * bend).toFixed(1)},${(my + (ny / len) * bend).toFixed(1)} ${x.toFixed(1)},${y.toFixed(1)}`;
 }
 
-export function Orbit({ agents, busy, onPick }: {
+export function Orbit({ agents, busy, onPick, selected, compact }: {
   agents: AgentInfo[] | null; busy: Set<AgentId>; onPick?: (id: AgentId) => void;
+  selected?: AgentId; compact?: boolean;
 }) {
   const by = Object.fromEntries((agents ?? []).map((a) => [a.id, a]));
   const model = (id: AgentId) => {
@@ -44,7 +45,7 @@ export function Orbit({ agents, busy, onPick }: {
   const centerBusy = busy.has("intake");
 
   return (
-    <div className="orbit" role="group" aria-label="Ezra and its agents">
+    <div className={`orbit ${compact ? "compact" : ""}`} role="group" aria-label="Ezra and its agents">
       <svg viewBox={`0 0 ${W} ${H}`} className="orbit-svg" aria-hidden>
         <path d={RING_PATH} className="orbit-ring" />
         <ellipse cx={CX} cy={CY} rx={RX * 0.55} ry={RY * 0.55} className="orbit-ring faint" />
@@ -68,7 +69,7 @@ export function Orbit({ agents, busy, onPick }: {
         })}
       </svg>
 
-      <button type="button" className={`orbit-core ${centerBusy ? "live" : ""}`}
+      <button type="button" className={`orbit-core ${centerBusy ? "live" : ""} ${selected === "intake" ? "sel" : ""}`}
               style={{ left: `${(CX / W) * 100}%`, top: `${(CY / H) * 100}%` }}
               onClick={() => onPick?.("intake")}
               aria-label={`Ezra: reads your request and sends it to the right agent. Runs on ${model("intake")}.`}>
@@ -83,7 +84,7 @@ export function Orbit({ agents, busy, onPick }: {
         const p = pos(angle);
         const live = busy.has(id);
         return (
-          <button key={id} type="button" className={`pad ${live ? "live" : ""}`}
+          <button key={id} type="button" className={`pad ${live ? "live" : ""} ${selected === id ? "sel" : ""}`}
                   style={{ left: `${(p.x / W) * 100}%`, top: `${(p.y / H) * 100}%`, "--d": `${angle}ms` } as CSSProperties}
                   onClick={() => onPick?.(id)}
                   aria-label={`${AGENT[id].name}: ${AGENT[id].does}. ${model(id)}${live ? ". Working now" : ""}`}>

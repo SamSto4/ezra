@@ -196,3 +196,54 @@ def system_view(store: Store) -> dict[str, Any]:
         "cache_saved_usd": round(saved, 6),
         "config_dir": str(CONFIG_DIR.relative_to(PROJECT_ROOT)),
     }
+
+
+# Which trace steps belong to which agent (the same mapping the UI uses).
+AGENT_STEPS: dict[str, tuple[str, ...]] = {
+    "intake": ("intake",),
+    "code_joe": ("setup", "plan", "adjudicate", "package"),
+    "builder": ("builder", "revise"),
+    "tester": ("tester",),
+    "checks": ("checks",),
+    "guardian": ("review", "deliver", "escalate"),
+    "learner": ("learner",),
+}
+_TERMINAL = {"done", "escalated", "failed"}
+
+
+def agent_board(store: Store, running: set[str], limit: int = 30) -> dict[str, Any]:
+    """Each agent's status on each recent task: what it last did, whether it's working on it
+    now, done, failed, waiting or not needed. Read-only, built from the traces."""
+    from ezra.trace import build_trace
+
+    tasks = store.list_tasks(limit)
+    board: dict[str, list[dict[str, Any]]] = {a: [] for a in AGENT_STEPS}
+    for t in tasks:
+        tr = build_trace(store, t["task_id"])
+        if tr is None:
+            continue
+        last_step = tr.rows[-1].step if tr.rows else None
+        for agent, steps in AGENT_STEPS.items():
+            mine = [r for r in tr.rows if r.step in steps]
+            calls = [r.invocation for r in mine if r.invocation]
+            if not mine:
+                state = "not_needed" if str(tr.status) in _TERMINAL else "waiting"
+            elif t["task_id"] in running and last_step in steps:
+                state = "working"
+            elif any(("FAILED" in r.detail or "ESCALATE" in r.detail or "stopped" in r.detail)
+                     for r in mine):
+                state = "needs_attention"
+            else:
+                state = "done"
+            last_event = next((r for r in reversed(mine) if not r.invocation), None)
+            board[agent].append({
+                "task_id": t["task_id"], "title": t.get("title"), "description": t["description"],
+                "task_status": str(tr.status), "verdict": tr.verdict, "state": state,
+                "cost_usd": sum((i.actual_cost_usd or 0.0) for i in calls),
+                "model": calls[-1].model_id if calls else None,
+                "last_kind": last_event.kind if last_event else None,
+                "last_data": last_event.data if last_event else {},
+                "last_detail": last_event.detail if last_event else None,
+                "last_at": mine[-1].at.isoformat() if mine else None,
+            })
+    return board

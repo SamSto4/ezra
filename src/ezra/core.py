@@ -18,6 +18,7 @@ from ezra.config import DATA_DIR, PLAYGROUND_DIR, load_limits, load_routing
 from ezra.contracts import (
     ApprovalRecord,
     ApprovalStatus,
+    GuardianReview,
     StandardDepartmentResult,
     TaskEnvelope,
     TaskStatus,
@@ -52,6 +53,7 @@ class TaskView:
     status: TaskStatus
     spend_usd: float
     events: list[dict[str, Any]]
+    reviews: list[GuardianReview]
 
 
 def get_task(store: Store, task_id: str) -> TaskView | None:
@@ -60,7 +62,8 @@ def get_task(store: Store, task_id: str) -> TaskView | None:
         return None
     envelope, status = found
     return TaskView(envelope=envelope, status=status, spend_usd=store.spend_for_task(task_id),
-                    events=store.events_for_task(task_id))
+                    events=store.events_for_task(task_id),
+                    reviews=store.reviews_for_task(task_id))
 
 
 def pending_approvals(store: Store) -> list[ApprovalRecord]:
@@ -78,9 +81,11 @@ class RunError(Exception):
 class RunOutcome:
     task_id: str
     status: TaskStatus
-    outcome: str  # "packaged", "stopped" or "held"
+    outcome: str  # "passed", "escalated", "stopped" or "held"
     holds: list[dict[str, Any]]  # pending HOLDs: approval_id, node, summary
     result: StandardDepartmentResult | None
+    review: GuardianReview | None  # the last Guardian review
+    reviews: int  # how many reviews the task got (1, or 2 after a REVISE)
     stopped: list[str]
     spend_usd: float
 
@@ -99,10 +104,13 @@ def _outcome(store: Store, app: Any, cfg: dict, task_id: str) -> RunOutcome:
     values = snap.values
     holds = [i.value for i in snap.interrupts]
     result = values.get("result")
+    review = values.get("review")
     return RunOutcome(
         task_id=task_id, status=store.get_task(task_id)[1],
         outcome="held" if holds else values.get("outcome", "stopped"), holds=holds,
         result=StandardDepartmentResult.model_validate(result) if result else None,
+        review=GuardianReview.model_validate(review) if review else None,
+        reviews=len(store.reviews_for_task(task_id)),
         stopped=values.get("stopped", []), spend_usd=store.spend_for_task(task_id))
 
 

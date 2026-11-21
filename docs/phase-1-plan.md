@@ -1,8 +1,8 @@
 # Phase 1: Thin Working Slice
 
 **Goal:** one real coding request flows end to end: **User → Ezra → Code Joe (Builder + Tester) → Guardian → User**. Every model call is logged, and every step lands in a trace we can read in Phase 2.
-**Governed by:** [decisions.md](decisions.md) (D-001 to D-010).
-**Status:** Approved. M1–M4 are done; see section 9.
+**Governed by:** [decisions.md](decisions.md) (D-001 to D-016).
+**Status:** Approved. M1–M5 are done; see section 9.
 
 ---
 
@@ -98,7 +98,7 @@ It lives in `config/routing.yaml`, so changing a model means editing config, not
 | **No arbitrary shell for the models** | Builder and Tester get file tools only (read, list, write, edit). They can't run commands. |
 | **Running tests is sandboxed, not airtight** | `pytest` and `ruff` run as a subprocess with cwd set to the worktree, a **scrubbed environment** (no `ANTHROPIC_API_KEY` or other secrets), and a timeout. **Residual risk:** running the tests means running Builder's code with your user's file permissions. In Phase 1 that's acceptable, because tasks target the `playground/` repo and you review the code before merging. A container sandbox is a later hardening step. |
 | **Code never leaves its branch** | Phase 1 has no push or merge code at all. At PASS, Ezra reports the branch name and the diff summary; *you* merge if you want it (D-009 Level 1). That's also why Guardian Tier 3 (D-007, "code going to main") isn't needed yet. |
-| **Cost limits** | Before each call, the Gateway checks: *actual spend so far + the worst case for this call* (counted input tokens + `max_tokens` × output price). If that would pass **$2** for the task or **$10** for the day, the task pauses with `HOLD` and Ezra asks you. LangGraph's interrupt + SQLite checkpointer should let the graph pause at any node and resume after your answer; **this is verified at M4**, and if it doesn't hold, the fallback is to end the task cleanly with a resumable checkpoint. |
+| **Cost limits** | Before each call, the Gateway checks: *actual spend so far + the worst case for this call* (counted input tokens + `max_tokens` × output price). If that would pass **$2** for the task or **$10** for the day, the Gateway first shrinks the call to fit: a smaller output limit, and lower effort if it shrinks below half (D-016). Only if even that can't fit does the task pause with `HOLD` and Ezra asks you. LangGraph's interrupt + SQLite checkpointer should let the graph pause at any node and resume after your answer; **this is verified at M4**, and if it doesn't hold, the fallback is to end the task cleanly with a resumable checkpoint. |
 | **Loop limits** | `infra_retries` ≤ 2 per call. `internal_iterations` ≤ 2 before the first submission and ≤ 1 after a REVISE. `correction_cycles` ≤ 1 per task. All of them are held in the TaskEnvelope. |
 | **Secrets** | The API key comes from your environment or `ant auth login`. It is never written to the database, the traces or the test subprocess. |
 
@@ -175,7 +175,7 @@ The steps are ordered so everything that needs **no API access** comes first. We
 - 100% of model calls go through the Gateway and are logged.
 - The file tools never write outside the worktree, which the M1 tests prove.
 - Code never leaves its branch without you.
-- The budget limits trigger `HOLD`.
+- The budget limits shrink a call to fit, or trigger `HOLD` (D-016).
 - We have a **baseline cost and token count per successful task** to improve against.
 
 ---
@@ -292,7 +292,48 @@ The steps are ordered so everything that needs **no API access** comes first. We
   - Steps now read the decision from the stored approval record when they start. A rejection stops the step before any model call. An extension raises only the cap the hold named, task or daily.
   - New tests cover a rejection and an approval where the pause doesn't repeat, and two workers paused and answered one at a time. 135 tests pass.
   - Run 2 proved pause and resume across processes live. The extension is proven by tests only. That HOLD was answered by Claude, back to the normal $2 cap, as part of the test.
-- **Carried into M5 (needs the user's yes, because it changes the path guard or a Guardian rule):** Builder can still write `conftest.py` or `pyproject.toml`, which can change how the frozen acceptance tests run, for example by skipping them. Options:
+- **Closed in M5 (D-015, approved by the user):** Builder can still write `conftest.py` or `pyproject.toml`, which can change how the frozen acceptance tests run, for example by skipping them. Options:
   - Block those files for Builder.
   - Have Guardian Tier 1 flag any change to them as a major finding.
 - **Carried into M6:** a crash or Ctrl-C mid-run leaves the task in `running` with its worktree, and `ezra run` then refuses it. Add `ezra run --resume`, or a cleanup command.
+
+**M5, done (2026-11-21).** Guardian review and REVISE. 151 tests pass and ruff is clean, including CLI tests for the PASS, ESCALATE and HOLD-then-approve output.
+
+- **D-015, approved by the user:** Builder can't write `conftest.py` (at any depth) or the root `pyproject.toml`, `pytest.ini`, `setup.cfg` or `tox.ini`. The check is case-insensitive and follows symlinks.
+- **Review step** (`guardian/tier2.py` plus a `review` node after `package`):
+  - Tier 1 runs first, with no model call. If it finds a blocking problem, the verdict is decided right there (D-007 short-circuit).
+  - Otherwise one Opus Tier 2 call reviews evidence only: the criteria with what Tier 1 proved, the diff, and the test results. It judges each inspection criterion with a quote, and reports findings outside the criteria, such as special-casing test inputs, a broken constraint, unrelated changes or security problems.
+  - The verdict always comes from the D-002 table, never from the model.
+- **REVISE** consumes the task's one correction cycle (D-004):
+  - Builder gets Guardian's corrections.
+  - Tester doesn't run again; the tests are frozen.
+  - After that, failures go straight to Builder by rule, with no adjudication call.
+  - The second review can't REVISE, so there is never a third attempt.
+  - PASS sets the task to `done` (merging stays your call). ESCALATE sets it to `escalated`.
+- **Tests:**
+  - REVISE then PASS: Guardian catches special-casing and the fix arrives with the tests frozen.
+  - REVISE then ESCALATE: an inspection criterion stays unmet (rule 8).
+  - A task never fixed gets one REVISE, then ESCALATE (rule 4), with no Guardian model call because Tier 1 settled both reviews.
+- **Live check** (a throwaway clone; Builder's first attempt replaced by flawed code, everything else real):
+  - The flawed code left out char_count's docstring (inspection criterion AC4) and quietly changed word_count, breaking a constraint. The existing tests still passed.
+  - Review 1 was REVISE (rule 7, Tier 2). It found AC4 unmet, quoting the line, and flagged `word_count_behavior_changed` as a major finding. It gave two concrete corrections.
+  - The real Builder fixed both. Review 2 was PASS (rule 9).
+  - 9 model calls cost **$0.066**. The second Guardian call read its 1,260-token instructions from the cache.
+  - This is the case Guardian exists for: every test passed, and only a reviewer reading the diff against the constraints could see the problem.
+- **How the live check was set up:** a throwaway clone, a hand-written task envelope (no intake), and an injected first Builder attempt. Guardian caught the missing docstring and the broken constraint **live**. Special-casing detection and both ESCALATE paths are proven with fakes only.
+- **Carried into M6:**
+  - The two M4 tasks (`task_43299c6a98c1`, `task_a2656c048f23`) finished at `in_review` under the old graph, before review existed, and `ezra run` only accepts `created` tasks. Add a review-only command (for example `ezra review <task>`) so they get a Guardian verdict. Don't edit the database by hand.
+  - Together with M4's crash note, this argues for one "resume or re-review a stuck task" command.
+- **Notes for Phase 2:**
+  - A REVISE that Builder can't act on uses up the one correction cycle and two Builder runs before the inevitable ESCALATE. Example: a missing or wrong acceptance test, since the tests are frozen. Consider escalating at once when every unmet item is a test problem.
+  - The model sets `auto_fixable`. A minor Tier 2 finding marked "needs user input" would escalate otherwise passing work through rule 2. Ignoring `auto_fixable` on minor findings would change a Guardian rule, so it needs the user's yes.
+
+- **Review pass after M5 (2026-11-21), requested by the user. 158 tests pass.**
+  - **Added D-016:** a call that would pass a budget cap is first shrunk to fit. Ezra HOLDs only when it can't fit.
+  - **Fixed:** `ezra task` now shows Guardian's verdicts.
+  - **Fixed:** the plan's cost-limit text now describes the fit step.
+  - **New tests:**
+    - the fit behavior: shrink, lower effort, the floors, and the daily cap
+    - Guardian answers are filtered to the criteria it was asked about (re-judged, invented and duplicate entries are dropped)
+    - CLI output for `run` and `task`
+  - **Noted, not changed:** if Guardian's own call fails (cut off, refused or an API error), the task ends `failed` rather than `escalated`. Treating "couldn't review" as ESCALATE would match D-002's "unverifiable counts as unmet" better. It's a Guardian rule change, so it needs the user's yes.

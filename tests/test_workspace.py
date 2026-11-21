@@ -127,3 +127,24 @@ def test_worktree_lifecycle(git_repo, tmp_path):
 def test_unsafe_task_id_rejected(git_repo, tmp_path):
     with pytest.raises(ValueError):
         create_worktree(git_repo, "../evil", tmp_path / "worktrees")
+
+
+@pytest.mark.parametrize("path", ["conftest.py", "tests/conftest.py", "pkg/sub/conftest.py",
+                                  "CONFTEST.py", "pyproject.toml", "PyProject.toml",
+                                  "pytest.ini", "setup.cfg", "tox.ini"])
+def test_builder_cannot_change_test_configuration(root, path):
+    # D-015: these files decide how tests run; changing them could silence acceptance tests.
+    with pytest.raises(ProtectedPathError, match="test configuration"):
+        PathGuard(root, Role.BUILDER).check_write(path)
+
+
+def test_nested_project_files_with_config_names_are_still_writable(root):
+    g = PathGuard(root, Role.BUILDER)
+    assert g.check_write("pkg/pyproject.toml")  # only the root one configures pytest
+    assert g.check_write("pkg/conftest_helpers.py")
+
+
+def test_builder_cannot_reach_test_config_through_symlink(root):
+    os.symlink(root, root / "pkg" / "up")
+    with pytest.raises((ProtectedPathError, PathEscapeError)):
+        PathGuard(root, Role.BUILDER).check_write("pkg/up/pyproject.toml")

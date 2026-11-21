@@ -1,11 +1,20 @@
 """Code Joe as a LangGraph graph.
 
-    setup → plan → (builder ∥ tester) → checks ─pass──────────────→ package → END
-                          ▲                │
-                          │                ├─fail, iterations left─→ adjudicate ─┐
-                          └────────────────┼──────────────────────────────────────┘
-                                           └─fail, cap reached────→ package
+    setup → plan → (builder ∥ tester) → checks ─pass──────────────→ package → review
+                          ▲                │                                    │
+                          │                ├─fail, iterations left─→ adjudicate ─┤ (back to
+                          │                └─fail, cap reached────→ package     │  builder/
+                          │                                                      │  tester)
+                          └──── revise ◄── REVISE (once per task, tests frozen) ─┤
+                                           PASS → deliver → END                  │
+                                           ESCALATE → escalate → END ◄───────────┘
     any step that stops (error or a rejected HOLD) → finish → END
+
+Guardian (M5): review runs Tier 1 (free) and, unless Tier 1 already decided, Tier 2 (one
+Opus call). The D-002 table picks the verdict. REVISE consumes the task's one correction
+cycle (D-004): Builder gets Guardian's corrections, Tester doesn't run again, and failures
+after that go straight back to Builder. The second review can't REVISE, so there is never a
+third attempt.
 
 Pausing for a budget HOLD (D-009 Level 1):
 - A model call that would pass the budget raises BudgetHold inside a step. The step saves a
@@ -40,17 +49,23 @@ from ezra.code_joe.workspace import Worktree, changed_files, commit_all, create_
 from ezra.contracts import (
     ApprovalStatus,
     CommandRun,
+    CriterionStatus,
+    Department,
     DeterministicCheck,
     LoopCounters,
     ResultStatus,
+    ReviewTier,
     StandardDepartmentResult,
     TaskEnvelope,
     TaskStatus,
     TokenMetrics,
+    Verdict,
     Verification,
 )
 from ezra.gateway import BudgetHold, Gateway, GatewayError, ModelRefusal
 from ezra.guardian.tier1 import criterion_pattern, is_acceptance_case, run_tier1
+from ezra.guardian.tier2 import run_tier2
+from ezra.guardian.verdict import VerdictInput, build_review
 from ezra.store import Store
 
 
@@ -75,6 +90,7 @@ class CodeJoeState(TypedDict, total=False):
     stopped: Annotated[list[str], operator.add]
     outcome: str
     result: dict
+    review: dict
 
 
 @dataclass
@@ -168,6 +184,35 @@ def _envelope(ctx: Context, task_id: str) -> TaskEnvelope:
     return found[0]
 
 
+def _failure_report(pytest_run: CommandRun, ruff_run: CommandRun, failed: list,
+                    missing: list[str]) -> str:
+    report = "\n".join(f"- {c.outcome}: {c.name}\n{c.message[-1200:]}" for c in failed)
+    if pytest_run.exit_code not in (0, 1):
+        report += f"\n\npytest exit code {pytest_run.exit_code}:\n" \
+                  f"{pytest_run.output_excerpt[-2000:]}"
+    if missing:
+        report += f"\n\nCriteria with no acceptance test: {', '.join(missing)}"
+    if ruff_run.exit_code not in (0, None):
+        report += f"\n\nruff:\n{ruff_run.output_excerpt[-1500:]}"
+    return report
+
+
+def _tier1_corrections(env: TaskEnvelope, t1: Any, result: StandardDepartmentResult
+                       ) -> list[str]:
+    """Repair instructions when Tier 1 decides alone: name what's unmet and why."""
+    by_id = {c.id: c for c in env.acceptance_criteria}
+    out = [f"{r.criterion_id} is not met ({r.status}): {by_id[r.criterion_id].text}"
+           + (f" Evidence: {r.evidence}" if r.evidence else "")
+           for r in t1.criteria_results
+           if r.status is not CriterionStatus.MET and r.criterion_id in t1.blocking_ids]
+    out += [f"{f.code}: {f.message}" for f in t1.findings]
+    pytest_run = next((c for c in result.command_runs if c.command == "pytest"), None)
+    if pytest_run:
+        out += [f"Failing test {c.name}: {c.message[-400:]}" for c in pytest_run.cases
+                if c.outcome in ("failed", "error")][:5]
+    return out
+
+
 def build_graph(ctx: Context, checkpointer: Any = None):
     store = ctx.store
 
@@ -246,6 +291,15 @@ def build_graph(ctx: Context, checkpointer: Any = None):
         pytest_run, ruff_run = (CommandRun(**c) for c in state["checks"])
         failed = [c for c in pytest_run.cases if c.outcome in ("failed", "error")]
         update: dict[str, Any] = {"counters": counters.model_dump()}
+        report = _failure_report(pytest_run, ruff_run, failed, state["missing"])
+        if counters.correction_cycles_used > 0:
+            # After a REVISE the tests are frozen (D-004): only Builder may change anything.
+            update.update(run_builder=True, run_tester=False, tester_feedback="",
+                          builder_feedback="Checks still fail after Guardian's corrections. "
+                                           f"Fix the code.\n\nFailing checks:\n{report}")
+            store.log_event(env.task_id, "adjudicated", fault="code", by="rule",
+                            reason="tests are frozen after REVISE")
+            return update
         if not failed and pytest_run.exit_code == 0 and state["missing"]:
             # Only tests are missing: a known fix, no model call needed.
             update.update(run_builder=False, run_tester=True, builder_feedback="",
@@ -254,14 +308,6 @@ def build_graph(ctx: Context, checkpointer: Any = None):
             store.log_event(env.task_id, "adjudicated", fault="tests", by="rule",
                             reason="missing acceptance tests")
             return update
-        report = "\n".join(f"- {c.outcome}: {c.name}\n{c.message[-1200:]}" for c in failed)
-        if pytest_run.exit_code not in (0, 1):
-            report += f"\n\npytest exit code {pytest_run.exit_code}:\n" \
-                      f"{pytest_run.output_excerpt[-2000:]}"
-        if state["missing"]:
-            report += f"\n\nCriteria with no acceptance test: {', '.join(state['missing'])}"
-        if ruff_run.exit_code not in (0, None):
-            report += f"\n\nruff:\n{ruff_run.output_excerpt[-1500:]}"
         gate = _Gate(ctx, state, "adjudicate")
         try:
             verdict, _ = adjudicate(gate.call, env, Plan(**state["plan"]),
@@ -305,15 +351,70 @@ def build_graph(ctx: Context, checkpointer: Any = None):
             model_call_count=len(invs), issues=issues,
             correction_cycles_used=counters.correction_cycles_used)
         store.record_result(result)
-        tier1 = run_tier1(env, result)
         store.set_task_status(env.task_id, TaskStatus.IN_REVIEW)
         store.log_event(env.task_id, "packaged", commit=sha, status=str(result.status),
                         changed_files=result.changed_files,
-                        criteria={r.criterion_id: str(r.status) for r in tier1.criteria_results},
-                        pending_inspection=tier1.pending_inspection,
-                        findings=[f.code for f in tier1.findings],
                         cost_usd=round(tokens.estimated_cost_usd, 6))
-        return {"outcome": "packaged", "result": result.model_dump(mode="json")}
+        return {"result": result.model_dump(mode="json")}
+
+    def review_node(state: CodeJoeState) -> dict:
+        env = _envelope(ctx, state["task_id"])
+        result = StandardDepartmentResult.model_validate(state["result"])
+        counters = LoopCounters(**state["counters"])
+        t1 = run_tier1(env, result)
+        results, findings = list(t1.criteria_results), list(t1.findings)
+        pending, tier, update = frozenset(t1.pending_inspection), ReviewTier.DETERMINISTIC, {}
+        summary = ""
+        if t1.short_circuit:
+            # Tier 1 already found a blocking problem: decide without a model call (D-007).
+            corrections = _tier1_corrections(env, t1, result)
+        else:
+            gate = _Gate(ctx, state, "review")
+            try:
+                t2 = run_tier2(gate.call, env, result, t1.criteria_results,
+                               t1.pending_inspection, state["base_commit"])
+            except _STOPPING as e:
+                return {"stopped": [f"review: {e}"], **gate.update()}
+            results += t2.criteria_results
+            findings += t2.findings
+            pending, tier, corrections = frozenset(), ReviewTier.CHECKLIST, \
+                t2.required_corrections
+            summary, update = t2.summary, gate.update()
+        review = build_review(
+            task_id=env.task_id, source_department=Department.CODE_JOE, tier=tier,
+            inp=VerdictInput(criteria=env.acceptance_criteria, criteria_results=results,
+                             findings=findings, pending=pending,
+                             correction_budget_left=counters.correction_budget_left()),
+            required_corrections=corrections, summary=summary)
+        store.record_review(review)
+        store.log_event(env.task_id, "reviewed", tier=str(tier), verdict=str(review.verdict),
+                        rule=review.matched_rule,
+                        criteria={r.criterion_id: str(r.status) for r in results},
+                        findings=[f"{f.severity}:{f.code}" for f in findings],
+                        corrections=len(review.required_corrections))
+        return {"review": review.model_dump(mode="json"), **update}
+
+    def revise_node(state: CodeJoeState) -> dict:
+        counters = LoopCounters(**state["counters"])
+        counters.start_revision()  # consumes the task's one correction cycle (D-004)
+        corrections = state["review"]["required_corrections"]
+        store.set_task_status(state["task_id"], TaskStatus.RUNNING)
+        store.log_event(state["task_id"], "revision_started", corrections=corrections)
+        return {"counters": counters.model_dump(), "run_builder": True, "run_tester": False,
+                "tester_feedback": "",
+                "builder_feedback": "Guardian reviewed your work and sent it back. Fix "
+                                    "these:\n" + "\n".join(f"- {c}" for c in corrections)}
+
+    def deliver_node(state: CodeJoeState) -> dict:
+        store.set_task_status(state["task_id"], TaskStatus.DONE)
+        store.log_event(state["task_id"], "delivered", branch=state["branch"])
+        return {"outcome": "passed"}
+
+    def escalate_node(state: CodeJoeState) -> dict:
+        store.set_task_status(state["task_id"], TaskStatus.ESCALATED)
+        store.log_event(state["task_id"], "escalated",
+                        reason=state["review"]["summary"][:500])
+        return {"outcome": "escalated"}
 
     def finish_node(state: CodeJoeState) -> dict:
         task_id = state["task_id"]
@@ -332,6 +433,12 @@ def build_graph(ctx: Context, checkpointer: Any = None):
         return ("adjudicate" if LoopCounters(**state["counters"]).can_iterate_internally()
                 else "package")
 
+    def after_review(state: CodeJoeState) -> str:
+        if state.get("stopped"):
+            return "finish"
+        verdict = Verdict(state["review"]["verdict"])
+        return {Verdict.PASS: "deliver", Verdict.REVISE: "revise"}.get(verdict, "escalate")
+
     def after_adjudicate(state: CodeJoeState) -> Any:
         if state.get("stopped"):
             return "finish"
@@ -343,6 +450,8 @@ def build_graph(ctx: Context, checkpointer: Any = None):
     for name, fn in (("setup", setup), ("plan", plan_node), ("builder", builder_node),
                      ("tester", tester_node), ("checks", checks_node),
                      ("adjudicate", adjudicate_node), ("package", package_node),
+                     ("review", review_node), ("revise", revise_node),
+                     ("deliver", deliver_node), ("escalate", escalate_node),
                      ("finish", finish_node)):
         g.add_node(name, fn)
     g.add_edge(START, "setup")
@@ -353,6 +462,10 @@ def build_graph(ctx: Context, checkpointer: Any = None):
     g.add_conditional_edges("checks", after_checks, ["package", "adjudicate", "finish"])
     g.add_conditional_edges("adjudicate", after_adjudicate,
                             ["builder", "tester", "checks", "finish"])
-    g.add_edge("package", END)
+    g.add_edge("package", "review")
+    g.add_conditional_edges("review", after_review, ["deliver", "revise", "escalate", "finish"])
+    g.add_edge("revise", "builder")
+    g.add_edge("deliver", END)
+    g.add_edge("escalate", END)
     g.add_edge("finish", END)
     return g.compile(checkpointer=checkpointer)

@@ -15,6 +15,10 @@ from enum import StrEnum
 from pathlib import Path
 
 ACCEPTANCE_TEST_DIR = "tests/acceptance"
+# Files that change how tests are collected or run. Builder may not write them, so it can't
+# make the frozen acceptance tests skip or pass without checking anything (D-015).
+TEST_CONFIG_ANYWHERE = frozenset({"conftest.py"})
+TEST_CONFIG_AT_ROOT = frozenset({"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"})
 _TASK_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _GIT_IDENTITY = ["-c", "user.name=Ezra", "-c", "user.email=ezra@localhost"]
 
@@ -82,6 +86,10 @@ class PathGuard:
             raise ProtectedPathError(f"role {self.role} is read-only")
         if self.role is Role.BUILDER and in_acceptance:
             raise ProtectedPathError(f"Builder may not write acceptance tests: {path!r}")
+        if self.role is Role.BUILDER and parts and (
+                parts[-1] in TEST_CONFIG_ANYWHERE
+                or (len(parts) == 1 and parts[0] in TEST_CONFIG_AT_ROOT)):
+            raise ProtectedPathError(f"Builder may not change test configuration: {path!r}")
         if self.role is Role.TESTER and not in_acceptance:
             raise ProtectedPathError(f"Tester may only write under {ACCEPTANCE_TEST_DIR}/")
         return resolved

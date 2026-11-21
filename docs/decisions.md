@@ -18,9 +18,11 @@ Status values: **Accepted** (decided by the user) · **Proposed** (recommended, 
 | D-009 | Which decisions come back to the user, by importance | Accepted |
 | D-010 | Runtime and scope: local Python, Claude-only, Learner logs Ezra only | Accepted |
 | D-011 | User interface: build UI v1 at the start of Phase 2; Phase 1 keeps the core UI-ready | Accepted |
-| D-012 | Learning goals: router vs no-router token experiment; observable long-term memory and patterns | Accepted |
+| D-012 | Learning goals: router experiment; observable memory and patterns; learning-vs-control experiment | Accepted |
 | D-013 | Standard format and storage; only user-stated Standards before Phase 3 | Accepted |
 | D-014 | Quality Rubric v1: versioned config, reweighted, anchors, critical failures, agent checks | Accepted |
+| D-015 | Builder can't change test configuration files | Accepted |
+| D-016 | Shrink a call to fit the budget before holding | Accepted |
 
 ---
 
@@ -284,6 +286,28 @@ You should be able to *see* how Ezra's memory and patterns form and change.
   - Cache-read share.
 - The learning guide is [learning/memory-and-patterns.md](learning/memory-and-patterns.md).
 
+### 3. Progressive learning, with a controlled experiment (added 2026-11-21, user's request)
+
+Ezra should learn from its own outcomes the way frontier agents do, and the gain must be *measured* against an Ezra that doesn't learn, so the numbers can be published.
+
+- **Research notes and plan:** [research/progressive-learning.md](research/progressive-learning.md). It covers Reflexion, ExpeL, ReasoningBank, Dynamic Cheatsheet, AWM, Voyager, ACE, GEPA, accumulated behavioral rules, and the 2026 budget-matched study.
+- **Method:**
+  - Guardian-judged outcomes are distilled into short, itemized lessons.
+  - Lessons are curated with incremental edits, never full rewrites, and track helpful and harmful counts.
+  - They're retrieved within a token budget and attributed per lesson.
+  - Learner owns this (Phase 4), with groundwork in Phases 2–3.
+- **Experiment arms:**
+  - control (no lessons)
+  - Ezra lessons
+  - **budget-matched control** (same extra tokens, no lessons)
+  - optionally, naive memory
+- **How it's measured:**
+  - The primary metric is hidden tests that Ezra never sees, plus cost per success.
+  - At least 3 runs per arm, reporting variance and paired confidence intervals.
+  - Pre-registered in the repo before running.
+- **Cost:** about $30–70 in total. Needs the user's yes and budget before it runs (D-009 Level 1).
+- **No code changes until Phase 2.** Until then, keep logging structured outcomes and record which prompt and context each call used.
+
 ---
 
 ## D-013 — Standard format and storage  *(Accepted)*
@@ -317,6 +341,42 @@ Decided by the user on 2026-11-20 (a D-009 Level 1 change to Guardian's rules). 
 - **Critical failures.** The spec's six automatic-fail conditions are named codes; `grade()` rejects unknown codes.
 - **Agent checks** (the D-005 table, wording and severities approved by the user 2026-11-20) are yes/no checks with a severity. A failed or unverifiable check becomes a Finding that goes through the D-002 verdict table; it is not mixed into the 7-category score, so scores stay comparable across agents. They are `system_defined`; revisit with Phase 2 evidence.
 - **Token efficiency is not a rubric category.** Guardian can't see token counts and the Gateway measures them exactly. Model Evals will combine "passed the gates" with actual cost.
+
+---
+
+## D-015 — Builder can't change test configuration  *(Accepted)*
+
+Approved by the user on 2026-11-21. It changes the path guard, a D-009 Level 1 item.
+
+**The gap:** Builder could write `conftest.py` or `pyproject.toml`. Those files decide how pytest collects and runs tests, so Builder could make the frozen acceptance tests skip, or pass without checking anything.
+
+**The rule:** Builder may not write:
+- `conftest.py` at any depth
+- `pyproject.toml`, `pytest.ini`, `setup.cfg` or `tox.ini` at the project root
+
+The check is case-insensitive and follows symlinks, like the rest of the guard. Tester and the acceptance tests are unaffected.
+
+**Consequence:** a task that really needs a new dependency or a pytest setting can't be done by Builder alone. Intake already routes "no new dependencies" as a constraint. If a real need appears, it comes back to the user.
+
+---
+
+## D-016 — Shrink a call to fit the budget before holding  *(Accepted)*
+
+Requested by the user on 2026-11-21. It refines when D-009's Level 1 budget HOLD triggers.
+
+**Before:** if spend so far plus a call's worst case would pass $2 for the task or $10 for the day, Ezra held and asked.
+
+**Now:** the Gateway first tries to make the call fit.
+- It lowers the call's output limit (`max_tokens`) to the largest value whose worst case stays under the cap.
+- If that is less than half of what was asked, it also lowers the effort one step, so the model plans for a shorter answer.
+- Only when the fitted limit would fall below a quarter of the request, or below 1,024 tokens, does Ezra HOLD. With that little room the job can't be finished well.
+
+**What it never does:** switch to a cheaper model to get under a limit. That would change routing (a D-009 Level 2 decision) and dodge a limit, which the routing addendum forbids.
+
+**How it works:**
+- The fit happens under the same lock as the budget reservation, so parallel calls can't race it.
+- Each fit is logged as a `budget_fit` event with the requested and fitted limits.
+- Spend still never passes the cap. The shrunk call's worst case is what gets reserved.
 
 ---
 

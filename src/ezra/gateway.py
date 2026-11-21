@@ -30,6 +30,12 @@ from ezra.pricing import PriceTable
 from ezra.store import Store
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+EFFORT_LADDER = ["low", "medium", "high", "xhigh", "max"]
+# Budget fit (D-016): a call that would pass a cap is first shrunk to fit. Its output limit may
+# drop to a quarter of what was asked, and never below this floor; smaller than that is too
+# little to finish the job, so Ezra HOLDs and asks instead.
+FIT_MIN_TOKENS = 1024
+FIT_MIN_SHARE = 0.25
 
 
 class GatewayError(Exception):
@@ -130,9 +136,18 @@ class Gateway:
                                         max_tokens=max_tokens)
         caps = (task_budget_usd if task_budget_usd is not None else self.limits.task_budget_usd,
                 daily_budget_usd if daily_budget_usd is not None else self.limits.daily_budget_usd)
-        self._check_and_reserve(task_id=task_id, operation=operation, model=route.model,
-                                worst=worst, caps=caps, approval_id=approval_id,
-                                persist_hold=persist_hold)
+        requested = max_tokens
+        max_tokens, worst = self._check_and_reserve(
+            task_id=task_id, operation=operation, model=route.model, worst=worst, caps=caps,
+            approval_id=approval_id, persist_hold=persist_hold, input_tokens=input_tokens,
+            max_tokens=max_tokens)
+        if max_tokens < requested:
+            if max_tokens < requested / 2:  # much less room: think less so the answer fits
+                step = EFFORT_LADDER.index(route.effort) if route.effort in EFFORT_LADDER else 0
+                output_config["effort"] = EFFORT_LADDER[max(0, step - 1)]
+            self.store.log_event(task_id, "budget_fit", operation=operation,
+                                 requested_max_tokens=requested, max_tokens=max_tokens,
+                                 effort=output_config["effort"], worst_case_usd=round(worst, 6))
         try:
             return self._call_reserved(shared, route, operation, department, task_id,
                                        input_tokens, max_tokens, worst)
@@ -189,7 +204,10 @@ class Gateway:
 
     def _check_and_reserve(self, *, task_id: str | None, operation: str, model: str,
                            worst: float, caps: tuple[float, float], approval_id: str | None,
-                           persist_hold: bool) -> None:
+                           persist_hold: bool, input_tokens: int = 0,
+                           max_tokens: int = 0) -> tuple[int, float]:
+        """Reserve this call's worst case, or shrink the call to fit (D-016), or HOLD.
+        Returns the (possibly reduced) max_tokens and the worst case actually reserved."""
         task_limit, day_limit = caps
         with self._lock:
             spent_task = (self.store.spend_for_task(task_id) if task_id else 0.0) + \
@@ -197,11 +215,20 @@ class Gateway:
             spent_today = self.store.spend_since(start_of_local_day(self.now())) + \
                 self._reserved_day
             breaches = self._breaches(spent_task, spent_today, worst, task_limit, day_limit)
+            if breaches and max_tokens:
+                headroom = min(task_limit - spent_task, day_limit - spent_today)
+                fitted = min(max_tokens - 1, self.pricing.max_output_within(
+                    model, input_tokens=input_tokens, budget_usd=headroom))
+                if fitted >= max(FIT_MIN_TOKENS, int(max_tokens * FIT_MIN_SHARE)):
+                    max_tokens = fitted
+                    worst = self.pricing.worst_case(model, input_tokens=input_tokens,
+                                                    max_tokens=fitted)
+                    breaches = []
             if not breaches:
                 key = task_id or ""
                 self._reserved_task[key] = self._reserved_task.get(key, 0.0) + worst
                 self._reserved_day += worst
-                return
+                return max_tokens, worst
         self._hold(task_id=task_id, operation=operation, model=model, worst=worst,
                    breaches=breaches, spent_task=spent_task, spent_today=spent_today,
                    caps=caps, approval_id=approval_id, persist=persist_hold)

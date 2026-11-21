@@ -228,3 +228,49 @@ def test_missing_credentials_is_a_clear_error(store, monkeypatch):
     with pytest.raises(MissingCredentials):
         Gateway(store=store, routing=load_routing(), limits=load_limits(),
                 pricing=load_pricing())
+
+
+# -- D-016: shrink a call to fit the budget before holding ---------------------------------
+
+
+def test_call_is_shrunk_to_fit_instead_of_holding(store):
+    _spend(store, 1.95, task_id="task_x")  # $0.05 left of $2
+    client = FakeClient(count=100)
+    resp = call(gateway(store, client), task_id="task_x", max_tokens=8000)
+    sent = client.messages.stream_calls[0]
+    # Sonnet worst case: 100 * $2.50 + n * $10 per million <= $0.05  ->  n <= 4975
+    assert sent["max_tokens"] == 4975
+    assert sent["output_config"]["effort"] == "medium"  # more than half the room: same effort
+    assert resp.invocation.estimated_cost_usd <= 0.05 + 1e-9
+    fit = [e for e in store.events_for_task("task_x") if e["kind"] == "budget_fit"][0]
+    assert (fit["requested_max_tokens"], fit["max_tokens"]) == (8000, 4975)
+    assert store.pending_approvals() == []
+
+
+def test_much_smaller_room_also_lowers_effort(store):
+    _spend(store, 1.97, task_id="task_x")  # $0.03 left -> 2975 tokens of 8000 requested
+    client = FakeClient()
+    call(gateway(store, client), task_id="task_x", max_tokens=8000)
+    sent = client.messages.stream_calls[0]
+    assert sent["max_tokens"] == 2975 and sent["output_config"]["effort"] == "low"
+
+
+def test_too_little_room_to_finish_still_holds(store):
+    _spend(store, 1.99, task_id="task_x")  # $0.01 left -> 975 tokens: under the 1024 floor
+    client = FakeClient()
+    with pytest.raises(BudgetHold):
+        call(gateway(store, client), task_id="task_x", max_tokens=8000)
+    assert client.messages.stream_calls == []
+
+
+def test_fit_never_goes_below_a_quarter_of_the_request(store):
+    _spend(store, 1.80, task_id="task_x")  # $0.20 left -> 19975 tokens of 100k: under 25%
+    with pytest.raises(BudgetHold):
+        call(gateway(store, FakeClient()), task_id="task_x", max_tokens=100_000)
+
+
+def test_fit_uses_the_daily_cap_too(store):
+    _spend(store, 9.95)  # today, no task: $0.05 left of the $10 day
+    client = FakeClient()
+    call(gateway(store, client), max_tokens=8000)
+    assert client.messages.stream_calls[0]["max_tokens"] == 4975

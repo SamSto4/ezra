@@ -98,6 +98,9 @@ def _cmd_task(args: argparse.Namespace) -> int:
     for rule in env.constraints:
         print(f"  constraint: {rule}")
     print(f"Spend so far: ${view.spend_usd:.6f} of ${env.budget.task_limit_usd:.2f}")
+    for i, rev in enumerate(view.reviews, 1):
+        print(f"Review {i}: {rev.verdict} (rule {rev.matched_rule}, {rev.tier})"
+              + (f" - {rev.summary[:150]}" if rev.summary else ""))
     print("Events: " + ", ".join(e["kind"] for e in view.events))
     return EXIT_OK
 
@@ -105,7 +108,10 @@ def _cmd_task(args: argparse.Namespace) -> int:
 _STEP_LABELS = {"setup": "worktree ready", "plan": "plan ready (Opus)",
                 "builder": "Builder finished", "tester": "Tester finished",
                 "checks": "tests and lint ran", "adjudicate": "Code Joe judged the failure",
-                "package": "work committed on its branch", "finish": "stopped"}
+                "package": "work committed on its branch",
+                "review": "Guardian reviewed it", "revise": "Guardian sent it back (REVISE)",
+                "deliver": "PASS: ready for you", "escalate": "ESCALATE: needs you",
+                "finish": "stopped"}
 
 
 def _step(node: str) -> None:
@@ -124,17 +130,26 @@ def _print_outcome(out: core.RunOutcome) -> int:
         print(f"Code Joe stopped: {'; '.join(out.stopped) or 'unknown reason'}")
         print(f"Spent: ${out.spend_usd:.4f}")
         return EXIT_ERROR
-    r = out.result
+    r, rev = out.result, out.review
     pytest_run = next((c for c in r.command_runs if c.command == "pytest"), None)
     passed = sum(c.outcome == "passed" for c in pytest_run.cases) if pytest_run else 0
     total = len(pytest_run.cases) if pytest_run else 0
-    print(f"Code Joe finished: {r.status}. Branch {r.branch} ({len(r.changed_files)} files).")
-    print(f"Tests: {passed}/{total} passed. Model calls: {r.model_call_count}. "
-          f"Cost: ${out.spend_usd:.4f}.")
-    for issue in r.issues:
-        print(f"  issue: {issue}")
-    print(f"Nothing was merged. See it with: ezra task {r.task_id}")
-    return EXIT_OK
+    revised = " after one REVISE" if out.reviews > 1 else ""
+    print(f"Guardian verdict: {rev.verdict}{revised} (rule {rev.matched_rule}, {rev.tier}).")
+    print(f"Branch {r.branch}: {len(r.changed_files)} files. Tests {passed}/{total} passed. "
+          f"Cost ${out.spend_usd:.4f}.")
+    for c in rev.criteria_results:
+        print(f"  {c.criterion_id}: {c.status}" + (f"  ({c.evidence[:90]})" if c.evidence
+                                                   else ""))
+    for f in rev.findings:
+        print(f"  finding [{f.severity}] {f.code}: {f.message[:120]}")
+    if rev.summary:
+        print(f"Guardian: {rev.summary[:300]}")
+    if out.outcome == "passed":
+        print(f"Nothing was merged. Merging {r.branch} is your call.")
+        return EXIT_OK
+    print("Escalated to you: Ezra won't try again on its own.")
+    return EXIT_ERROR
 
 
 def _run_guarded(fn) -> int:

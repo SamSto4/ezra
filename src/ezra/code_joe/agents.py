@@ -173,6 +173,8 @@ file tools. Rules:
 - Keep existing behavior working. No new dependencies.
 - You can't read or write tests/acceptance/; acceptance tests are someone else's job. You
   may add or update other tests if useful.
+- You can't change test configuration (conftest.py, pyproject.toml, pytest.ini, setup.cfg,
+  tox.ini). Work within the project's existing setup.
 - You can't run code. Reason carefully about edge cases in the criteria instead.
 When you're done, reply with two or three sentences on what you changed. Don't call tools
 in that final reply.

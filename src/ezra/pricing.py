@@ -64,5 +64,13 @@ class PriceTable(BaseModel):
         return (input_tokens * write + max_tokens * out) / PER_TOKEN
 
 
+    def max_output_within(self, model: str, *, input_tokens: int, budget_usd: float) -> int:
+        """The largest max_tokens whose worst case stays within budget_usd (can be <= 0)."""
+        candidates = [self.require(model)] + [self.models[f] for f in self.require(model).fallbacks]
+        write = max(c.cache_write for c in candidates)
+        out = max(c.output for c in candidates)
+        return int((budget_usd * PER_TOKEN - input_tokens * write) // out)
+
+
 def load_pricing(config_dir: Path = CONFIG_DIR) -> PriceTable:
     return PriceTable.model_validate(_load_yaml(config_dir / "pricing.yaml"))

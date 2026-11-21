@@ -1,0 +1,21 @@
+# Progressive learning: "lessons" (D-012 goal 3, docs/research/progressive-learning.md §4).
+# The arms of the planned experiment differ by this file only, never by code paths.
+version: lessons-v1
+# "off": no lessons in prompts and no learning after tasks (the control arm).
+# "lessons": retrieve lessons into prompts, and learn from each finished task.
+# Quoted on purpose: YAML reads a bare off as false.
+memory: "off"
+# Prompts that receive lessons. Guardian never does: the judge stays independent of what
+# the workers were told.
+inject_into: [code_joe.plan, builder.implement, tester.write_tests]
+# Upper bound on lesson text per prompt, estimated at 4 characters per token.
+retrieval_token_cap: 700
+# Active lessons per operation; past this, the lowest-scoring one is retired.
+max_active_per_operation: 25
+# Retire a lesson once harmful exceeds helpful by this much.
+retire_margin: 2
+# Merge a proposed lesson into an existing one when their word overlap (Jaccard) is at least
+# this high, instead of adding a near-duplicate.
+merge_similarity: 0.6
+# At most this many new lessons per task.
+max_lessons_per_task: 3

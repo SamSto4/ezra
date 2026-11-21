@@ -19,17 +19,29 @@ from langgraph.types import Command
 from ezra.benchmarks import BenchmarkScore, ReferenceExample, load_examples
 from ezra.benchmarks import score as score_benchmark
 from ezra.code_joe.graph import Context, build_graph
-from ezra.config import DATA_DIR, PLAYGROUND_DIR, load_limits, load_routing
+from ezra.config import (
+    DATA_DIR,
+    PLAYGROUND_DIR,
+    LearningConfig,
+    load_learning,
+    load_limits,
+    load_routing,
+)
 from ezra.contracts import (
     ApprovalRecord,
     ApprovalStatus,
     GuardianReview,
+    Lesson,
+    LessonStatus,
     StandardDepartmentResult,
     TaskEnvelope,
     TaskStatus,
 )
 from ezra.gateway import Gateway
 from ezra.intake import IntakeResult, run_intake
+from ezra.learner.curator import retire
+from ezra.learner.loop import LearnOutcome, learn_from_task
+from ezra.learner.retrieval import LessonProvider
 from ezra.pricing import load_pricing
 from ezra.store import Store
 from ezra.trace import Trace, build_trace
@@ -148,15 +160,26 @@ class RunOutcome:
     reviews: int  # how many reviews the task got (1, or 2 after a REVISE)
     stopped: list[str]
     spend_usd: float
+    memory: str = "off"
+    learning: LearnOutcome | None = None  # what Ezra learned from this task, if anything
 
 
 def _graph(store: Store, gateway: Gateway, checkpoint_path: Path | str,
-           worktrees_dir: Path | None):
+           worktrees_dir: Path | None, learning: LearningConfig | None = None):
     Path(checkpoint_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(checkpoint_path), check_same_thread=False)
     ctx = Context(store=store, gateway=gateway, worktrees_dir=worktrees_dir or WORKTREES_DIR,
-                  test_timeout=gateway.limits.test_timeout_seconds)
+                  test_timeout=gateway.limits.test_timeout_seconds,
+                  lessons=LessonProvider(store, learning or load_learning()))
     return build_graph(ctx, SqliteSaver(conn)), conn
+
+
+def _learn_if_finished(store: Store, gateway: Gateway, out: RunOutcome,
+                       learning: LearningConfig) -> RunOutcome:
+    if out.memory == "lessons" and out.outcome in ("passed", "escalated"):
+        out.learning = learn_from_task(store, gateway, out.task_id, learning)
+        out.spend_usd = store.spend_for_task(out.task_id)
+    return out
 
 
 def _outcome(store: Store, app: Any, cfg: dict, task_id: str) -> RunOutcome:
@@ -171,7 +194,8 @@ def _outcome(store: Store, app: Any, cfg: dict, task_id: str) -> RunOutcome:
         result=StandardDepartmentResult.model_validate(result) if result else None,
         review=GuardianReview.model_validate(review) if review else None,
         reviews=len(store.reviews_for_task(task_id)),
-        stopped=values.get("stopped", []), spend_usd=store.spend_for_task(task_id))
+        stopped=values.get("stopped", []), spend_usd=store.spend_for_task(task_id),
+        memory=values.get("memory", "off"))
 
 
 def _drive(app: Any, payload: Any, cfg: dict, on_step: Any) -> None:
@@ -184,9 +208,16 @@ def _drive(app: Any, payload: Any, cfg: dict, on_step: Any) -> None:
 def run_task(store: Store, gateway: Gateway, task_id: str,
              task_budget_usd: float | None = None,
              checkpoint_path: Path | str = CHECKPOINT_PATH,
-             worktrees_dir: Path | None = None, on_step: Any = None) -> RunOutcome:
+             worktrees_dir: Path | None = None, on_step: Any = None,
+             memory: str | None = None,
+             learning: LearningConfig | None = None) -> RunOutcome:
     """Run Code Joe on a created task. `task_budget_usd` can only lower the cap for this run;
-    raising it is the user's decision (an approved HOLD)."""
+    raising it is the user's decision (an approved HOLD). `memory` ("off" or "lessons")
+    overrides config/learning.yaml for this run."""
+    learning = learning or load_learning()
+    memory = memory or learning.memory
+    if memory not in ("off", "lessons"):
+        raise RunError(f"memory must be 'off' or 'lessons', not '{memory}'.")
     found = store.get_task(task_id)
     if found is None:
         raise RunError(f"No task '{task_id}'.")
@@ -198,19 +229,21 @@ def run_task(store: Store, gateway: Gateway, task_id: str,
         if task_budget_usd > cap:
             raise RunError(f"--task-budget can only lower the cap (max ${cap:.2f}).")
         cap = task_budget_usd
-    app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir)
+    app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir, learning)
     cfg = {"configurable": {"thread_id": task_id}}
     try:
         with _lease(store, task_id):
-            _drive(app, _start_payload(env, task_id, cap), cfg, on_step)
-        return _outcome(store, app, cfg, task_id)
+            _drive(app, _start_payload(env, task_id, cap, memory), cfg, on_step)
+        return _learn_if_finished(store, gateway, _outcome(store, app, cfg, task_id),
+                                  learning)
     finally:
         conn.close()
 
 
-def _start_payload(env: TaskEnvelope, task_id: str, cap: float) -> dict[str, Any]:
+def _start_payload(env: TaskEnvelope, task_id: str, cap: float,
+                   memory: str = "off") -> dict[str, Any]:
     return {"task_id": task_id, "task_cap": cap, "daily_cap": env.budget.daily_limit_usd,
-            "budget_extra_task": 0.0, "budget_extra_day": 0.0}
+            "budget_extra_task": 0.0, "budget_extra_day": 0.0, "memory": memory}
 
 
 def _resumable(snap: Any) -> bool:
@@ -223,9 +256,12 @@ def _resumable(snap: Any) -> bool:
 
 def resume_task(store: Store, gateway: Gateway, task_id: str,
                 checkpoint_path: Path | str = CHECKPOINT_PATH,
-                worktrees_dir: Path | None = None, on_step: Any = None) -> RunOutcome:
+                worktrees_dir: Path | None = None, on_step: Any = None,
+                learning: LearningConfig | None = None) -> RunOutcome:
     """Continue a task that was cut off (a crash or Ctrl-C) from its last saved step.
-    The step that was interrupted runs again from its start; finished steps don't."""
+    The step that was interrupted runs again from its start; finished steps don't.
+    The run keeps the memory setting it started with."""
+    learning = learning or load_learning()
     found = store.get_task(task_id)
     if found is None:
         raise RunError(f"No task '{task_id}'.")
@@ -233,7 +269,7 @@ def resume_task(store: Store, gateway: Gateway, task_id: str,
     if status in TERMINAL:
         raise RunError(f"Task {task_id} is {status}; there's nothing to resume.")
     _check_not_running(store, task_id)
-    app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir)
+    app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir, learning)
     cfg = {"configurable": {"thread_id": task_id}}
     try:
         snap = app.get_state(cfg)
@@ -244,7 +280,8 @@ def resume_task(store: Store, gateway: Gateway, task_id: str,
         if not snap.values:
             if status is TaskStatus.CREATED:
                 raise RunError(f"Task {task_id} hasn't started yet. Use `ezra run {task_id}`.")
-            payload: Any = _start_payload(env, task_id, env.budget.task_limit_usd)
+            payload: Any = _start_payload(env, task_id, env.budget.task_limit_usd,
+                                          learning.memory)
         elif _resumable(snap):
             payload = None  # continue from the checkpoint
         else:
@@ -255,7 +292,8 @@ def resume_task(store: Store, gateway: Gateway, task_id: str,
                         status_before=str(status))
         with _lease(store, task_id):
             _drive(app, payload, cfg, on_step)
-        return _outcome(store, app, cfg, task_id)
+        return _learn_if_finished(store, gateway, _outcome(store, app, cfg, task_id),
+                                  learning)
     finally:
         conn.close()
 
@@ -327,8 +365,10 @@ def default_extension(approval: ApprovalRecord) -> float:
 def answer_hold(store: Store, gateway: Gateway, approval_id: str, approved: bool,
                 extend_usd: float | None = None, note: str | None = None,
                 checkpoint_path: Path | str = CHECKPOINT_PATH,
-                worktrees_dir: Path | None = None, on_step: Any = None) -> RunOutcome:
+                worktrees_dir: Path | None = None, on_step: Any = None,
+                learning: LearningConfig | None = None) -> RunOutcome:
     """Approve or reject a HOLD and resume the paused task (D-009 Level 1)."""
+    learning = learning or load_learning()
     approval = store.get_approval(approval_id)
     if approval is None:
         raise RunError(f"No approval '{approval_id}'.")
@@ -341,7 +381,7 @@ def answer_hold(store: Store, gateway: Gateway, approval_id: str, approved: bool
                        "Run the request again.")
     _check_not_running(store, approval.task_id)
     extend = default_extension(approval) if extend_usd is None else extend_usd
-    app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir)
+    app, conn = _graph(store, gateway, checkpoint_path, worktrees_dir, learning)
     cfg = {"configurable": {"thread_id": approval.task_id}}
     try:
         snap = app.get_state(cfg)
@@ -356,14 +396,14 @@ def answer_hold(store: Store, gateway: Gateway, approval_id: str, approved: bool
         with _lease(store, approval.task_id):
             _drive(app, Command(resume={match[0].id: {"approved": approved,
                                                       "extend_usd": extend}}), cfg, on_step)
-        return _outcome(store, app, cfg, approval.task_id)
+        return _learn_if_finished(store, gateway, _outcome(store, app, cfg, approval.task_id),
+                                  learning)
     finally:
         conn.close()
 
 
-# -- Trace (M6) ------------------------------------------------------------------------
-
-
-def get_trace(store: Store, task_id: str) -> Trace | None:
-    """Everything that happened to a task, from the store alone (no model calls)."""
-    return build_trace(store, task_id)
+        with _lease(store, approval.task_id):
+            _drive(app, Command(resume={match[0].id: {"approved": approved,
+                                                      "extend_usd": extend}}), cfg, on_step)
+        return _learn_if_finished(store, gateway, _outcome(store, app, cfg, approval.task_id),
+                                  learning)

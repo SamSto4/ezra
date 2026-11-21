@@ -8,3 +8,4 @@ operations:
   builder.implement:  {model: claude-sonnet-5-5, effort: medium}
   tester.write_tests: {model: claude-sonnet-5-5, effort: medium}
   guardian.tier2:     {model: claude-opus-5-5,   effort: low}
+  learner.reflect:    {model: claude-sonnet-5-5, effort: low}

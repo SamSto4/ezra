@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ezra.contracts import Limits
 
@@ -45,3 +46,23 @@ def load_limits(config_dir: Path = CONFIG_DIR) -> Limits:
 
 def load_routing(config_dir: Path = CONFIG_DIR) -> RoutingTable:
     return RoutingTable.model_validate(_load_yaml(config_dir / "routing.yaml"))
+
+
+class LearningConfig(BaseModel):
+    """config/learning.yaml: progressive learning settings (D-012)."""
+
+    model_config = ConfigDict(extra="forbid")
+    version: str = "lessons-v1"
+    memory: Literal["off", "lessons"] = "off"
+    inject_into: list[str] = Field(default_factory=lambda: [
+        "code_joe.plan", "builder.implement", "tester.write_tests"])
+    retrieval_token_cap: int = Field(default=700, ge=0)
+    max_active_per_operation: int = Field(default=25, ge=1)
+    retire_margin: int = Field(default=2, ge=1)
+    merge_similarity: float = Field(default=0.6, gt=0, le=1)
+    max_lessons_per_task: int = Field(default=3, ge=0, le=3)
+
+
+def load_learning(config_dir: Path = CONFIG_DIR) -> LearningConfig:
+    path = config_dir / "learning.yaml"
+    return LearningConfig.model_validate(_load_yaml(path)) if path.exists() else LearningConfig()

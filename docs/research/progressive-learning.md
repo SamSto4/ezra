@@ -1,6 +1,6 @@
 # Progressive learning and pattern recognition in agents: research notes and plan
 
-**Status:** research notes and a plan (D-012, goal 3). No code changes yet.
+**Status:** research notes and a plan (D-012, goal 3). A first version of the lessons loop is built and off by default (§8).
 **Date:** 2026-11-21.
 **Question:** how do frontier agents get better from their own experience without retraining the model? How should Ezra do it? And how do we *prove* it helps, against an agent that doesn't learn?
 
@@ -220,6 +220,40 @@ Everything else is frozen:
 1. Should lessons stay per-project, or may they transfer across projects? That changes how much they can help, and the leakage risk.
 2. Experiment budget: a one-time cap, such as $75, and whether it may run over several days.
 3. Should the router experiment (D-012) and this one share the same task set? It's cheaper, but it couples their results.
+
+
+## 8. First version built (2026-11-21)
+
+The first step of §4.2 is in `src/ezra/learner/`. It's **off by default**
+(`config/learning.yaml: memory: "off"`); turn it on per run with `ezra run <task> --memory lessons`.
+
+| Step | Where | What it does |
+|---|---|---|
+| Judge | Guardian (unchanged) | Its verdict, findings and corrections are the learning signal |
+| Distill | `learner/reflector.py` | One Sonnet call (effort low, `learner.reflect`) reads the structured outcome, never a transcript, and proposes 0–3 lessons. It also rates each lesson the task carried: helpful, harmful or neutral |
+| Validate | `learner/validator.py` | Deterministic: rejects criterion/task ids, acceptance test paths, the task's quoted values and multi-digit numbers (leakage), vague advice, wrong target |
+| Store | `store.py` tables `lessons`, `lesson_history`, `lesson_uses` | Every change is a new version in an append-only history |
+| Curate | `learner/curator.py` | Deterministic deltas: add, merge a near-duplicate (word overlap ≥ 0.6, text kept), rate, retire (harmful − helpful ≥ 2, or over 25 active per operation) |
+| Retrieve | `learner/retrieval.py` | Active lessons for this operation and project, ranked by helpful − harmful, capped at ~700 tokens, sent as a second cached system block. Planner, Builder and Tester get lessons; Guardian never does |
+| Attribute | `ModelInvocation.context_refs`, `lesson_uses`, M6 attribution | Each call logs the lesson ids it carried; M6's attribution also stores the lesson block as a context piece labelled `lessons` |
+
+**Budget:** lessons are part of the counted input, so the existing budget check, fit (D-016) and HOLD
+cover them. The Reflector's call uses the task's own caps; if it wouldn't fit, the reflection is
+skipped and logged, never HELD, because the task is already delivered.
+
+**CLI:** `ezra lessons` (list), `ezra lessons show <id>` (version history),
+`ezra lessons retire <id>` (one-step rollback), `ezra learn <task_id>` (learn from a finished task by hand).
+
+**Guesses to revisit (marked in code too):**
+1. A clean run (first review PASS, no findings, checks never failed) skips the Reflector to save
+   tokens, and credits the lessons it carried as helpful "by association". ReasoningBank also learns
+   from successes, so this may lose signal.
+2. New lessons are scoped to the project they came from (open question 1 in §7).
+3. Inferred lessons go live at once and are reported after the run (D-009 Level 2).
+4. Retrieval estimates 4 characters per token; the Gateway's real count is what the budget uses.
+5. Guardian doesn't validate lessons yet: that's a change to Guardian's job (D-009 Level 1), so the
+   deterministic checks are the only gate for now.
+6. A failed or skipped reflection still marks the task as learned from; it isn't retried.
 
 ---
 

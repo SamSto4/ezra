@@ -62,6 +62,14 @@ def _new(kind: str) -> BenchmarkScore:
     return BenchmarkScore(kind=kind, benchmark_version=str(load_benchmarks()["version"]))
 
 
+_LITERALS = re.compile(r'"(?:\\.|[^"\\])*"|`[^`]*`')
+
+
+def _without_literals(text: str) -> str:
+    """Text with quoted strings and code spans blanked: the words being tested aren't wording."""
+    return _LITERALS.sub(" ", text)
+
+
 def _has_phrase(text: str, phrases: list[str]) -> list[str]:
     low = text.lower()
     return [p for p in phrases if re.search(rf"(?<!\w){re.escape(p.lower())}(?!\w)", low)]
@@ -93,8 +101,15 @@ def _schema_errors(e: ValidationError, limit: int = 6) -> list[str]:
 
 # -- Acceptance Criteria (docs/reference-outputs/acceptance-criteria.md) -----------------
 
-# GUESS: a test criterion is concrete when it names a call or quotes code.
-_CONCRETE = re.compile(r"\w\(|`[^`]+`")
+# A test criterion is concrete when it names something to exercise (a call, a code span or a
+# quoted input) and an observable result (result_words in config/benchmarks.yaml, or == / ->).
+_SUBJECT = re.compile(r'\w\(|`[^`]+`|"(?:\\.|[^"\\])*"')
+
+
+def is_concrete(text: str, result_words: list[str]) -> bool:
+    words = "|".join(re.escape(w) for w in result_words)
+    result = re.compile(rf"\b(?:{words})\b|==|->", re.IGNORECASE)
+    return bool(_SUBJECT.search(text) and result.search(text))
 
 
 def score_criteria(text: str) -> BenchmarkScore:
@@ -122,9 +137,12 @@ def score_intake_decision(decision: IntakeDecision,
     score.metrics.update(criteria=len(crits),
                          chars=sum(len(c.text) for c in crits) + len(decision.task_title)
                          + len(decision.task_description))
-    if not cfg["min_criteria"] <= len(crits) <= cfg["max_criteria"]:
-        score.warnings.append(f"{len(crits)} criteria; the reference aims for "
-                              f"{cfg['min_criteria']}-{cfg['max_criteria']}")
+    # Deterministic criteria are free checks (D-007), so only the others count toward the range.
+    worked = [c for c in crits if c.verification is not Verification.DETERMINISTIC]
+    score.metrics["model_criteria"] = len(worked)
+    if not cfg["min_criteria"] <= len(worked) <= cfg["max_criteria"]:
+        score.warnings.append(f"{len(worked)} criteria besides free checks; the reference aims "
+                              f"for {cfg['min_criteria']}-{cfg['max_criteria']}")
     if len(decision.task_title) > cfg["max_title_chars"]:
         score.warnings.append(f"title is {len(decision.task_title)} characters "
                               f"(under {cfg['max_title_chars']})")
@@ -133,12 +151,14 @@ def score_intake_decision(decision: IntakeDecision,
         score.warnings.append(f"description is {n} sentences "
                               f"(at most {cfg['max_description_sentences']})")
     for c in crits:
-        vague = _has_phrase(c.text, cfg["vague_phrases"])
+        vague = _has_phrase(_without_literals(c.text), cfg["vague_phrases"])
         if vague:
             score.warnings.append(f"{c.id}: vague wording {vague}; Guardian may only manage "
                                   "cannot_verify")
-        if c.verification is Verification.TEST and not _CONCRETE.search(c.text):
-            score.warnings.append(f"{c.id}: test criterion names no call or code to test")
+        if c.verification is Verification.TEST and not is_concrete(c.text,
+                                                                   cfg["result_words"]):
+            score.warnings.append(f"{c.id}: test criterion doesn't name both an input to test "
+                                  "and its expected result")
     return score
 
 
@@ -254,6 +274,13 @@ def score_standard(text: str) -> BenchmarkScore:
 # -- Quality Rubric: graded answers (docs/reference-outputs/quality-rubric.md) -----------
 
 
+def _prose_words(text: str) -> int:
+    """Words outside fenced and indented code blocks: code doesn't make headings worth it."""
+    text = re.sub(r"^```.*?^```", "", text, flags=re.MULTILINE | re.DOTALL)
+    return _words("\n".join(line for line in text.splitlines()
+                             if not line.startswith(("    ", "\t"))))
+
+
 def score_answer(text: str) -> BenchmarkScore:
     """The cheap, deterministic part of the rubric (F Clarity, G Presentation) only.
 
@@ -262,9 +289,10 @@ def score_answer(text: str) -> BenchmarkScore:
     score = _new("quality-rubric")
     cfg = load_benchmarks()["answers"]
     words = _words(text)
+    prose = _prose_words(text)
     headings = len(re.findall(r"^#{1,6} ", text, flags=re.MULTILINE))
-    score.metrics.update(words=words, headings=headings)
-    first = text.strip().split("\n\n", 1)[0]
+    score.metrics.update(words=words, prose_words=prose, headings=headings)
+    first = re.split(r"(?<=[.!?])\s+", text.strip().split("\n\n", 1)[0], maxsplit=1)[0]
     pre = _has_phrase(first, cfg["preamble_phrases"])
     if pre:
         score.warnings.append(f"preamble instead of the answer: {pre}")
@@ -272,8 +300,8 @@ def score_answer(text: str) -> BenchmarkScore:
     sign = _has_phrase(last, cfg["signoff_phrases"])
     if sign:
         score.warnings.append(f"sign-off: {sign}")
-    if headings and words < cfg["short_answer_words"]:
-        score.warnings.append(f"{headings} headings in a {words}-word answer")
+    if headings and prose < cfg["short_answer_words"]:
+        score.warnings.append(f"{headings} headings in an answer of {prose} prose words")
     if re.search(r"^#{1,6} (conclusion|summary|recap)\b", text, flags=re.MULTILINE | re.I):
         score.warnings.append("recap section repeats the answer")
     return score

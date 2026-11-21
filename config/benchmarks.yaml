@@ -11,15 +11,21 @@
 # Every value marked GUESS is a first-version heuristic, not a measured threshold.
 # Revisit them once real outputs have been scored (M6 traces make that possible).
 # Changing this file doesn't change any verdict: nothing here feeds the D-002 table.
-version: "1"
+# v2 (2026-11-21): tuned against the first 8 real intakes (see docs/benchmarks.md, "Tuning v2").
+version: "2"
 
 acceptance_criteria:
   # Reference checklist says 3-6; intake's hard rule (problems_with) stays 2-8.
+  # Only criteria a model has to work on count: `deterministic` ones (tests_pass, lint) are
+  # free checks (D-007), so they don't count toward this range.
   min_criteria: 3
   max_criteria: 6
   max_title_chars: 60
   max_description_sentences: 3
-  # GUESS: words that make a criterion untestable (turn into cannot_verify under D-002).
+  # Words that make a criterion untestable (turn into cannot_verify under D-002). The first 11
+  # come from the weak reference example; the rest are the usual "weak words" of requirements
+  # writing (ISO/IEC/IEEE 29148). Text inside quotes or backticks is ignored before matching,
+  # so word_count("fast") is never flagged. v2: 0 hits on the 38 real criteria so far.
   vague_phrases:
     - works correctly
     - correctly handles
@@ -32,6 +38,33 @@ acceptance_criteria:
     - as expected
     - properly
     - well documented
+    - appropriate
+    - appropriately
+    - adequate
+    - sufficient
+    - reasonable
+    - user-friendly
+    - intuitive
+    - easy to
+    - seamless
+    - fast
+    - quickly
+    - flexible
+    - etc
+    - and so on
+    - if possible
+    - as needed
+    - where necessary
+    - various
+    - edge cases
+    - any input
+    - all inputs
+    - valid input
+    - handles errors
+  # A `test` criterion is concrete when it names something to exercise (a call, a code span or
+  # a quoted input) AND an observable result. The words that count as a result:
+  result_words: [returns, return, returned, raises, raise, prints, print, outputs, output,
+                 writes, write, equals, equal, yields, yield, exits, exit, importable, imported]
 
 standards:
   # Sections every Standard needs to be ruled on. The template's other sections are warnings.
@@ -44,12 +77,18 @@ standards:
 answers:
   # Only the cheap, deterministic part of the Quality Rubric (F Clarity, G Presentation).
   # Accuracy, task achievement and reasoning need Guardian's judgement (Tier 3).
-  # GUESS: phrase lists, taken from the weak reference answer.
-  preamble_phrases: ["great question", "let's walk through", "don't worry", "i'd be happy to",
-                     "happy to help", "certainly!"]
-  signoff_phrases: ["i hope this helps", "hope this helps", "let me know if", "feel free to",
-                    "happy coding"]
-  # GUESS: an answer shorter than this many words shouldn't need markdown headings.
+  # Preambles are looked for in the first sentence only; sign-offs in the last paragraph only.
+  # Started from the weak reference answer, widened in v2 with common filler openers/closers.
+  preamble_phrases: ["great question", "good question", "excellent question", "let's walk through",
+                     "don't worry", "i'd be happy to", "happy to help", "certainly!", "sure!",
+                     "absolutely!", "of course!", "let's dive in", "let's break this down",
+                     "i'll walk you through"]
+  signoff_phrases: ["i hope this helps", "hope this helps", "hope that helps", "let me know if",
+                    "feel free to", "happy coding", "good luck", "don't hesitate to",
+                    "is there anything else", "any other questions", "happy to help further",
+                    "cheers"]
+  # An answer with fewer prose words than this (code blocks not counted) shouldn't need
+  # markdown headings. 300 words is about one 80x24 terminal screen, where Ezra's answers are read.
   short_answer_words: 300
 
 model_evals:

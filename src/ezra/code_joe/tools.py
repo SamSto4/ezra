@@ -157,7 +157,7 @@ class AgentRun:
 
 def run_agent(call: Callable[..., Any], *, operation: str, department: Any, system: str,
               user: str, tools: FileTools, max_turns: int, max_tokens: int,
-              task_id: str) -> AgentRun:
+              task_id: str, context: list[tuple[str, str]] | None = None) -> AgentRun:
     """`call` is Gateway.call (or a wrapper that handles HOLDs). Loops until the model
     stops asking for tools, or fails clearly at the turn cap."""
     messages: list[dict[str, Any]] = [{"role": "user", "content": user}]
@@ -166,7 +166,7 @@ def run_agent(call: Callable[..., Any], *, operation: str, department: Any, syst
     for turn in range(1, max_turns + 1):
         resp = call(operation=operation, department=department, system=system,
                     messages=messages, max_tokens=max_tokens, task_id=task_id, tools=defs,
-                    cache_conversation=True)
+                    cache_conversation=True, context=context)
         invocations.append(resp.invocation)
         msg = resp.message
         if resp.invocation.fallback_used:

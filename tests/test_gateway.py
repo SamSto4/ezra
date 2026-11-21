@@ -3,6 +3,7 @@
 from datetime import UTC, datetime, timedelta
 
 import anthropic
+import httpx
 import pytest
 from fakes import FakeClient, attempt, message
 
@@ -274,3 +275,42 @@ def test_fit_uses_the_daily_cap_too(store):
     client = FakeClient()
     call(gateway(store, client), max_tokens=8000)
     assert client.messages.stream_calls[0]["max_tokens"] == 4975
+
+
+# -- attribution (M6) ----------------------------------------------------------------
+
+
+def test_attribution_records_prompt_version_context_and_full_text(store):
+    gw = gateway(store, FakeClient())
+    gw.call(operation="ezra.intake", department=Department.EZRA, system="You are Ezra.",
+            messages=[{"role": "user", "content": "summary\n\n2+2?"}], max_tokens=1000,
+            context=[("project_summary", "summary"), ("request", "2+2?")])
+    inv = only_invocation(store)
+    assert inv.prompt_name == "ezra.intake"
+    assert inv.prompt_version.startswith("ezra.intake@") and len(inv.prompt_version) == 22
+    assert [(c.label, c.chars) for c in inv.context] == [("project_summary", 7),
+                                                         ("request", 4)]
+    assert store.get_text(inv.context[1].sha) == "2+2?"
+    assert "summary" in store.get_text(inv.message_hashes[0])
+    assert "Four." in store.get_text(inv.response_hash)
+
+
+def test_prompt_version_changes_with_wording_and_texts_are_stored_once(store):
+    gw = gateway(store, FakeClient([message(), message(), message()]))
+    call(gw)
+    call(gw)
+    gw.call(operation="ezra.intake", department=Department.EZRA, system="You are Ezra!",
+            messages=[{"role": "user", "content": "2+2?"}], max_tokens=1000)
+    rows = store.conn.execute("SELECT record FROM model_invocations ORDER BY created_at")
+    versions = [ModelInvocation.model_validate_json(r["record"]).prompt_version for r in rows]
+    assert versions[0] == versions[1] != versions[2]
+    # system x2 distinct, one user message, one reply: identical text is stored once.
+    assert store.conn.execute("SELECT COUNT(*) FROM texts").fetchone()[0] == 4
+
+
+def test_failed_call_still_carries_attribution(store):
+    client = FakeClient([anthropic.APIConnectionError(request=httpx.Request("POST", "http://x"))])
+    with pytest.raises(GatewayError):
+        call(gateway(store, client))
+    inv = only_invocation(store)
+    assert inv.prompt_version and inv.message_hashes and inv.response_hash is None

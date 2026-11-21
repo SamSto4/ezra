@@ -137,17 +137,22 @@ def run_tier2(call: Callable[..., Any], env: TaskEnvelope, result: StandardDepar
                                                                    if r.evidence else "")
                              for r in settled) or "- none"
     to_judge = [c for c in env.acceptance_criteria if c.id in pending]
+    diff = diff_evidence(Path(result.worktree_path), base_commit)
+    tests = test_evidence(result.command_runs)
     user = (f"## Task\n{env.description}\n\n## Acceptance criteria\n"
             f"{criteria_text(env.acceptance_criteria)}\n\n## Already settled by automatic "
             f"checks\n{settled_text}\n\n## Criteria for you to judge\n"
             f"{criteria_text(to_judge) or '- none (report findings only)'}\n\n"
             "## Constraints\n" + ("\n".join(f"- {c}" for c in env.constraints) or "- none")
             + "\n\n## Changed files\n" + "\n".join(f"- {f}" for f in result.changed_files)
-            + f"\n\n## Test results\n{test_evidence(result.command_runs)}\n\n"
-            f"## Diff\n```diff\n{diff_evidence(Path(result.worktree_path), base_commit)}\n```")
+            + f"\n\n## Test results\n{tests}\n\n## Diff\n```diff\n{diff}\n```")
     resp = call(operation=OPERATION, department=Department.GUARDIAN, system=SYSTEM,
                 messages=[{"role": "user", "content": user}], max_tokens=MAX_TOKENS,
-                task_id=env.task_id, output_format={"type": "json_schema", "schema": SCHEMA})
+                task_id=env.task_id, output_format={"type": "json_schema", "schema": SCHEMA},
+                context=[("task", env.description),
+                         ("criteria", criteria_text(env.acceptance_criteria)),
+                         ("settled_by_tier1", settled_text), ("test_results", tests),
+                         ("diff", diff)])
     invs = [resp.invocation]
     if resp.truncated or not resp.text.strip():
         raise AgentError("Guardian's review was cut off or empty", invs)

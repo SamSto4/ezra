@@ -36,8 +36,9 @@ clean; weak examples must not be.
 
 ## Where it's wired in now
 
-1. **Intake (live, log only).** After a `code` request passes intake, its criteria are scored and
-   an `intake_benchmark` event is saved with the warnings and sizes. No repair, no extra call,
+1. **Intake (live, log only).** After a request passes intake, its criteria (code route) or its
+   answer (direct route) is scored and an `intake_benchmark` event is saved with the warnings
+   and sizes; `ezra trace` shows it. No repair, no extra call,
    no change in behaviour. This builds a record of how often intake misses the checklist, which
    M6's trace view can show.
 2. **`ezra bench <kind> <file>`** scores any output: `criteria`, `standard`, `answer`, `review`,
@@ -47,18 +48,24 @@ clean; weak examples must not be.
    Phase 1), `score_eval` for the Phase 6 eval runner, `score_standard` for the Phase 3 Standards
    library (it can already lint `standards/private/`).
 
-## Guesses to revisit (all marked GUESS in config/benchmarks.yaml)
+## Tuning v2 (2026-11-21, approved by the user)
 
-- The vague-phrase, length-phrase, preamble and sign-off word lists. They were taken from the
-  weak examples, so they will miss other phrasings and may flag a legitimate use.
-- "A test criterion is concrete if it names a call or has a code span." Cheap, and it catches
-  every weak criterion in the reference, but it can't tell a precise sentence from a vague one
-  that happens to contain backticks.
-- "More than one sentence in Requirement means more than one requirement."
-- The 300-word line under which an answer shouldn't need headings.
+Grounded in Ezra's first 8 real intakes (6 coding tasks, 2 direct answers, Nov 20-21): 0 needed
+a repair, all 6 coding tasks passed Guardian first time with every criterion met, criteria per
+task were 6-8. `config/benchmarks.yaml` is now version 2.
 
-Measure these once M6 traces have real intake outputs: count how often each warning fires and
-check a sample by hand.
+| # | Item | What changed |
+|---|---|---|
+| 1 | Word lists | Vague phrases 11 → 34 (the usual requirements "weak words"); quoted strings and code spans are blanked before matching. Preambles are looked for in the first sentence only; 7 more sign-offs. 0 hits on the 38 real criteria. |
+| 2 | "Concrete" test criterion | Needs something to exercise (a call, code span or quoted input) **and** an observable result (`result_words`, `==`, `->`). Fixes the one false warning on real data (longest_word AC6). |
+| 3 | Headings in short answers | Still 300 words (about one 80x24 terminal screen), counting prose only: code blocks don't count. |
+| 4 | Warnings blocking or fixing | Unchanged: log only. A warning type may be proposed for promotion only after ≥ 20 scored coding tasks, and only if tasks with it end in REVISE, ESCALATE or a failed hidden test at least twice as often as tasks without it. Promotion is a Guardian rule change (D-009 Level 1). |
+| 5 | Wiring | Now: `ezra trace` shows the `intake_benchmark` line; direct answers are scored too (`scored: quality-rubric`). Later: Tier 3 runs `score_review` on Guardian's own JSON (failed gate → one repair, then the Guardian-failed path; never changes a verdict); the Phase 6 eval runner runs `score_eval` before saving a record (failed gate → not saved, run reports an error). |
+| 6 | Example in intake's prompt | Repairs were 0/8, so the A/B measures criteria count, warnings, output tokens and cost instead. `ezra intake-ab estimate|run|report`: the 10 progressive-learning task descriptions × 2 arms (`control`, `example`) × 3 runs = 60 intake calls, about $0.60, capped by `--max-usd`. Run it after the progressive-learning pilot. Adopt the example only if criteria and output tokens go down with no rise in repairs. |
+| 7 | Criteria count | `deterministic` criteria are free checks (D-007), so only the others count toward 3-6. On real data 2 of 6 tasks still warn (7 test criteria each), down from 5 of 6. |
+
+Still guesses (Standards, not yet used live): the length-phrase list and "more than one sentence
+in Requirement means more than one requirement".
 
 ## What it deliberately doesn't do
 
@@ -82,9 +89,7 @@ records the version.
 
 ## Possible next steps
 
-- Show `intake_benchmark` warnings in `ezra trace` (M6).
-- Call `score_review` inside Tier 3 when it goes live, and treat a failed gate as Guardian
-  infrastructure failure.
-- Use `score_eval` as the eval runner's output validator in Phase 6.
-- Experiment: intake with and without the best example in its prompt; compare repair rate and
-  cost per successful task.
+- Run `ezra intake-ab run --max-usd 1 --confirm` once the progressive-learning pilot is done.
+- Call `score_review` inside Tier 3 when it goes live (item 5 above).
+- Use `score_eval` as the eval runner's output validator in Phase 6 (item 5 above).
+- Revisit item 4 after 20 scored coding tasks.

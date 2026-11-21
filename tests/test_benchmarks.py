@@ -88,6 +88,64 @@ def test_best_criteria_are_shorter_than_weak():
     assert best < weak
 
 
+def _criteria(*crits: tuple[str, str]) -> str:
+    """A valid intake answer with the given (verification, text) criteria."""
+    items = [{"id": f"AC{i}", "text": text, "severity": "critical" if i == 1 else "major",
+              "verification": ver, "check": "tests_pass" if ver == "deterministic" else None,
+              "required_evidence": "test passes"} for i, (ver, text) in enumerate(crits, 1)]
+    return json.dumps({"route": "code", "answer": "", "task_title": "Add f",
+                       "task_description": "Add f.", "acceptance_criteria": items,
+                       "constraints": [], "unsupported_reason": ""})
+
+
+# Real criteria from Ezra's first coding tasks (2026-11-20/21): all passed Guardian, so the
+# checklist should have nothing to say about their wording.
+REAL_CRITERIA = [
+    'sentence_count("Hello there") with no terminating punctuation returns 0.',
+    'char_count("a\\tb\\nc\\r\\nd") returns 4 (tabs, newlines and carriage returns are not '
+    'counted).',
+    'Ties in count are broken alphabetically (ascending): top_words("pear apple fig", 3) '
+    'returns [("apple", 1), ("fig", 1), ("pear", 1)].',
+    'longest_word of whitespace-only text such as "   \\t\\n" returns "".',
+    'unique_words can be imported from the textkit package via `from textkit import '
+    'unique_words` and is the same function as textkit.stats.unique_words.',
+]
+
+
+@pytest.mark.parametrize("text", REAL_CRITERIA)
+def test_real_concrete_criteria_get_no_wording_warning(text):
+    s = score_criteria(_criteria(("test", text)))
+    assert not [w for w in s.warnings if "AC1" in w], s.warnings
+
+
+@pytest.mark.parametrize("text", [
+    "word_count() handles edge cases",          # a call, but no result and vague
+    "The function returns the right answer.",   # a result, but nothing to call
+    "Supports Unicode text including emoji.",
+])
+def test_criteria_without_input_and_result_are_not_concrete(text):
+    s = score_criteria(_criteria(("test", text)))
+    assert any("AC1" in w and "expected result" in w for w in s.warnings), s.warnings
+
+
+def test_vague_words_inside_quotes_or_code_dont_count():
+    s = score_criteria(_criteria(("test", 'is_fast("fast") returns True and `quickly()` '
+                                          'returns 1.')))
+    assert not [w for w in s.warnings if "vague" in w]
+    s = score_criteria(_criteria(("test", "parse(x) returns the result quickly.")))
+    assert any("vague" in w and "quickly" in w for w in s.warnings)
+
+
+def test_free_deterministic_checks_dont_count_toward_the_criteria_range():
+    six_tests = [("test", f"f({i}) returns {i}.") for i in range(6)]
+    s = score_criteria(_criteria(*six_tests, ("deterministic", "The test suite passes.")))
+    assert s.metrics == {**s.metrics, "criteria": 7, "model_criteria": 6}
+    assert not [w for w in s.warnings if "criteria besides" in w]
+    s = score_criteria(_criteria(*six_tests, ("test", "f(9) returns 9."),
+                                 ("deterministic", "The test suite passes.")))
+    assert any("7 criteria besides free checks" in w for w in s.warnings)
+
+
 def test_criteria_that_arent_json_fail_a_gate():
     assert score_criteria("route: code").gates == ["not valid JSON (Expecting value)"]
 
@@ -157,6 +215,25 @@ def test_weak_answer_warnings_name_the_padding():
     assert "great question" in warned and "i hope this helps" in warned
     assert "headings" in warned
     assert s.metrics["words"] > 3 * score("answer", body("quality-rubric/best")).metrics["words"]
+
+
+def test_preamble_is_only_looked_for_in_the_first_sentence():
+    assert not score("answer", "Run it twice. Make sure, of course!, to save first.").warnings
+    assert any("preamble" in w for w in score("answer", "Sure! Run it twice.").warnings)
+
+
+def test_new_sign_offs_are_caught():
+    s = score("answer", "Run `make`.\n\nGood luck with the build.")
+    assert any("good luck" in w for w in s.warnings)
+
+
+def test_code_blocks_dont_count_toward_the_heading_threshold():
+    code = "```python\n" + "x = 1\n" * 400 + "```\n"
+    s = score("answer", f"## Fix\n\nUse this:\n\n{code}")
+    assert s.metrics["prose_words"] < 300 < s.metrics["words"]
+    assert any("headings" in w for w in s.warnings)
+    long_prose = " ".join(["word"] * 320)
+    assert not score("answer", f"## Part one\n\n{long_prose}").warnings
 
 
 def _review(**changes) -> str:
@@ -257,22 +334,36 @@ def test_intake_logs_a_benchmark_score_without_an_extra_call(tmp_path, git_repo)
         store.close()
     assert len(result.invocations) == 1
     bench = [e for e in events if e["kind"] == "intake_benchmark"]
-    assert len(bench) == 1 and bench[0]["benchmark_version"] == "1"
+    assert len(bench) == 1 and bench[0]["benchmark_version"] == "2"
+    assert bench[0]["scored"] == "acceptance-criteria"
     assert bench[0]["metrics"]["criteria"] == 3
     # The test fixture's criteria say "behavior 1": the benchmark flags them as untestable.
     assert any("AC1" in w for w in bench[0]["warnings"])
 
 
-def test_intake_logs_no_benchmark_for_direct_answers(tmp_path, git_repo):
+def test_intake_scores_direct_answers_too(tmp_path, git_repo):
     store = Store(tmp_path / "ezra.db")
     try:
         gw = Gateway(store=store, routing=load_routing(), limits=load_limits(),
                      pricing=load_pricing(), client=FakeClient([decision("direct")]))
         result = run_intake(gw, "what's 2+2", project=git_repo, limits=load_limits())
-        kinds = [e["kind"] for e in store.events_for_task(result.request_id)]
+        events = store.events_for_task(result.request_id)
     finally:
         store.close()
-    assert "intake_benchmark" not in kinds
+    bench = [e for e in events if e["kind"] == "intake_benchmark"]
+    assert len(result.invocations) == 1  # still no extra call
+    assert len(bench) == 1 and bench[0]["scored"] == "quality-rubric"
+    assert "words" in bench[0]["metrics"]
+
+
+def test_trace_shows_the_intake_benchmark():
+    from ezra.trace import _event_detail
+    step, text = _event_detail("intake_benchmark", {
+        "benchmark_version": "2", "scored": "acceptance-criteria",
+        "warnings": ["AC2: vague wording ['robust']"]})
+    assert step == "intake" and "1 warning(s)" in text and "robust" in text
+    assert "answer clean" in _event_detail("intake_benchmark", {
+        "benchmark_version": "2", "scored": "quality-rubric", "warnings": []})[1]
 
 
 def test_cli_checks_the_reference_files(capsys):

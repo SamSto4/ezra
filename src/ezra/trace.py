@@ -87,6 +87,14 @@ def _event_detail(kind: str, d: dict[str, Any]) -> tuple[str, str]:
         case "intake_routed":
             return "intake", f"routed {d.get('route')}: {d.get('title', '')} " \
                              f"({d.get('criteria', 0)} criteria)"
+        case "intake_benchmark":
+            warnings = d.get("warnings") or []
+            what = "criteria" if d.get("scored", "acceptance-criteria") == "acceptance-criteria" \
+                else "answer"
+            if not warnings:
+                return "intake", f"benchmark v{d.get('benchmark_version')}: {what} clean"
+            return "intake", f"benchmark v{d.get('benchmark_version')}: {what}, " \
+                             f"{len(warnings)} warning(s): {_short(warnings, 3)}"
         case "intake_invalid":
             return "intake", f"answer broke {len(d.get('problems', []))} rule(s); repairing"
         case "code_joe_started":

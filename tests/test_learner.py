@@ -415,3 +415,16 @@ def test_cli_lists_shows_and_retires_lessons(store, tmp_path, monkeypatch, capsy
     assert cli.main(["lessons", "list", "--all"]) == cli.EXIT_OK
     assert "retired" in capsys.readouterr().out
     assert cli.main(["lessons", "retire", lsn.lesson_id]) == cli.EXIT_ERROR
+
+
+def test_frozen_memory_uses_lessons_but_learns_nothing(store, project, tmp_path):
+    les = lesson(text=LESSON_TEXT)
+    store.save_lesson(les, "added")
+    env = new_task(store, project)
+    scripts = REVISE_SCRIPTS()
+    del scripts[REFLECT_SYSTEM]  # a reflection call would fail the test: none is scripted
+    out, gw = run(store, tmp_path, scripts, env.task_id, memory="frozen")
+    assert out.outcome == "passed" and out.learning is None
+    assert all(len(s) == 2 for s in systems_of(gw, BUILD_SYSTEM))
+    assert store.lessons_used_by_task(env.task_id) == [les.lesson_id]
+    assert store.get_lesson(les.lesson_id).version == 1  # counters untouched

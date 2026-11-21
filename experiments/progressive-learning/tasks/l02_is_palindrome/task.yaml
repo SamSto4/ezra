@@ -1,0 +1,24 @@
+id: l02_is_palindrome
+category: new_function
+split: learn
+description: Add is_palindrome(text) to minitext. It should ignore case, spaces and punctuation.
+criteria:
+- id: AC1
+  text: is_palindrome(text) is importable from minitext and returns a bool
+  severity: critical
+  verification: test
+- id: AC2
+  text: Case, spaces and punctuation are ignored when comparing
+  severity: major
+  verification: test
+- id: AC3
+  text: Text with no letters or digits counts as a palindrome
+  severity: minor
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

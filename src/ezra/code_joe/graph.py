@@ -92,7 +92,7 @@ class CodeJoeState(TypedDict, total=False):
     outcome: str
     result: dict
     review: dict
-    memory: str  # "off" or "lessons" (config/learning.yaml), fixed for the whole run
+    memory: str  # "off", "lessons" or "frozen" (config/learning.yaml), fixed for the run
 
 
 @dataclass
@@ -151,7 +151,7 @@ class _Gate:
         return {"budget_extra_task": self.added_task, "budget_extra_day": self.added_day}
 
     def call(self, **kwargs: Any) -> Any:
-        if self.ctx.lessons is not None and self.state.get("memory") == "lessons":
+        if self.ctx.lessons is not None and self.state.get("memory") in ("lessons", "frozen"):
             # Lessons ride as a second cached system block. They're counted in the input,
             # so the budget check, fit and HOLD below cover them like any other token.
             context, refs = self.ctx.lessons.for_call(self.state["task_id"],

@@ -1,0 +1,26 @@
+id: l03_wrap
+category: new_function
+split: learn
+description: 'Add wrap(text, width) to minitext: split text into lines of at most width characters, breaking
+  only between words.'
+criteria:
+- id: AC1
+  text: wrap(text, width) is importable from minitext and returns a list of lines
+  severity: critical
+  verification: test
+- id: AC2
+  text: Lines are filled greedily with whole words separated by single spaces, each at most width characters
+  severity: major
+  verification: test
+- id: AC3
+  text: A word longer than width goes on its own line unbroken; empty or whitespace-only text gives an
+    empty list
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

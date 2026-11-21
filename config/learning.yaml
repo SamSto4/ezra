@@ -3,6 +3,7 @@
 version: lessons-v1
 # "off": no lessons in prompts and no learning after tasks (the control arm).
 # "lessons": retrieve lessons into prompts, and learn from each finished task.
+# "frozen": retrieve lessons but learn nothing (the held-out phase of the experiment).
 # Quoted on purpose: YAML reads a bare off as false.
 memory: "off"
 # Prompts that receive lessons. Guardian never does: the judge stays independent of what

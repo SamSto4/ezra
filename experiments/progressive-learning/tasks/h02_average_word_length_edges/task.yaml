@@ -1,0 +1,25 @@
+id: h02_average_word_length_edges
+category: edge_case
+split: heldout
+description: average_word_length in minitext raises ZeroDivisionError on empty text, and counts punctuation
+  as part of words. Fix both.
+criteria:
+- id: AC1
+  text: average_word_length returns 0.0 for empty or whitespace-only text
+  severity: critical
+  verification: test
+- id: AC2
+  text: Punctuation attached to words is not counted in their length
+  severity: major
+  verification: test
+- id: AC3
+  text: A token made only of punctuation is not a word
+  severity: minor
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

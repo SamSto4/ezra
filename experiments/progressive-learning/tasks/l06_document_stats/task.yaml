@@ -1,0 +1,26 @@
+id: l06_document_stats
+category: docs
+split: learn
+description: minitext/stats.py has no docstrings. Add a module docstring and a docstring to every public
+  function, without changing behavior.
+criteria:
+- id: AC1
+  text: minitext/stats.py has a module docstring
+  severity: major
+  verification: inspection
+- id: AC2
+  text: Every public function in minitext/stats.py has a docstring of at least one full sentence describing
+    what it returns
+  severity: major
+  verification: inspection
+- id: AC3
+  text: No function's behavior changes
+  severity: critical
+  verification: inspection
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

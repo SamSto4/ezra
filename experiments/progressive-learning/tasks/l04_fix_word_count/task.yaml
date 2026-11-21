@@ -1,0 +1,21 @@
+id: l04_fix_word_count
+category: bug_fix
+split: learn
+description: word_count in minitext gives wrong answers for empty text and for text with repeated spaces,
+  tabs or newlines. Fix it.
+criteria:
+- id: AC1
+  text: word_count of an empty or whitespace-only string is 0
+  severity: critical
+  verification: test
+- id: AC2
+  text: Repeated spaces, tabs and newlines between words don't create extra words
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

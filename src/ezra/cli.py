@@ -398,6 +398,69 @@ def _cmd_lessons(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_experiment(args: argparse.Namespace) -> int:
+    import tempfile
+    from pathlib import Path
+
+    from ezra import experiment as ex
+    tasks = ex.load_tasks()
+    if args.action == "validate":
+        bad = 0
+        with tempfile.TemporaryDirectory() as tmp:
+            for t in tasks:
+                check = ex.validate_task(t, Path(tmp))
+                bad += not check.ok
+                print(f"{'ok  ' if check.ok else 'FAIL'} {t.id} [{t.split} · {t.category}]"
+                      + ("" if check.ok else f": {'; '.join(check.problems)}"))
+        print(f"{len(tasks) - bad}/{len(tasks)} tasks are fair.")
+        return EXIT_OK if not bad else EXIT_ERROR
+    if args.action == "report":
+        rows = ex.load_rows()
+        if not rows:
+            print("No results yet.")
+            return EXIT_OK
+        for arm, s in ex.summarize(rows).items():
+            cps = (f"${s['cost_per_success_usd']:.4f}" if s["cost_per_success_usd"] is not None
+                   else "n/a")
+            print(f"{arm:15} held-out n={s['n']} runs={s['runs']}  hidden success "
+                  f"{s['success_rate']:.0%}  Guardian PASS {s['guardian_pass_rate']:.0%}  "
+                  f"mean cost ${s['mean_cost_usd']:.4f}  cost/success {cps}")
+        for arm in ("lessons", "budget_matched"):
+            d = ex.paired_difference(rows, arm)
+            if d:
+                print(f"{arm} - control: {d['diff']:+.1%} (95% CI {d['ci_low']:+.1%} to "
+                      f"{d['ci_high']:+.1%}, {d['pairs']} paired tasks)")
+        return EXIT_OK
+    arms = args.arms.split(",") if getattr(args, "arms", None) else list(ex.ARMS)
+    unknown = [a for a in arms if a not in ex.ARMS]
+    if unknown:
+        print(f"Unknown arm(s): {', '.join(unknown)}. Arms: {', '.join(ex.ARMS)}",
+              file=sys.stderr)
+        return EXIT_ERROR
+    est = ex.estimate(tasks, arms, args.runs)
+    print(f"{len(tasks)} tasks x {len(arms)} arm(s) x {args.runs} run(s) = {est.task_runs} "
+          f"task runs + {est.reflections} reflections: about ${est.low_usd:.2f}-"
+          f"${est.high_usd:.2f}.")
+    if args.action == "estimate":
+        return EXIT_OK
+    if not args.confirm:
+        print("Nothing was run. Live runs spend money: add --max-usd and --confirm once "
+              "you've agreed to the cost.")
+        return EXIT_HOLD
+    try:
+        for run in range(1, args.runs + 1):
+            for arm in arms:
+                print(f"Running {arm}, run {run}…", file=sys.stderr)
+                ex.run_arm(arm, run, tasks, max_usd=args.max_usd, on_task=lambda r: print(
+                    f"  {r.task}: {r.outcome}, hidden {'pass' if r.hidden_pass else 'FAIL'}, "
+                    f"${r.cost_usd:.4f}", file=sys.stderr))
+    except (core.RunError, MissingCredentials) as e:
+        print(str(e), file=sys.stderr)
+        return EXIT_ERROR
+    print("Done. See the results with: ezra experiment report")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ezra", description="Ezra, your AI agent.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -422,8 +485,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Lower the task's budget cap for this run (USD)")
     p_run.add_argument("--resume", action="store_true",
                        help="Continue a task that was cut off (crash or Ctrl-C)")
-    p_run.add_argument("--memory", choices=["off", "lessons"], default=None,
-                       help="Use and learn lessons this run (default: config/learning.yaml)")
+    p_run.add_argument("--memory", choices=["off", "lessons", "frozen"], default=None,
+                       help="lessons: use and learn; frozen: use without learning "
+                            "(default: config/learning.yaml)")
     p_run.set_defaults(func=_cmd_run)
     p_rv = sub.add_parser("review", help="Give Guardian review to a task that never got one")
     p_rv.add_argument("task_id")
@@ -459,6 +523,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_ret = les_sub.add_parser("retire", help="Stop using a lesson (kept in history)")
     p_ret.add_argument("lesson_id")
     p_les.add_argument("--all", action="store_true", help="Include retired lessons")
+    p_ex = sub.add_parser("experiment", help="The progressive learning experiment")
+    ex_sub = p_ex.add_subparsers(dest="action", required=True)
+    ex_sub.add_parser("validate", help="Check every task is fair (no model calls)")
+    ex_sub.add_parser("report", help="Summarize the results so far")
+    for name, text in (("estimate", "Estimate the cost of a run (no model calls)"),
+                       ("run", "Run arms live (spends money; needs --confirm)")):
+        p = ex_sub.add_parser(name, help=text)
+        p.add_argument("--arms", default=None, help="Comma-separated: control,lessons,"
+                       "budget_matched (default: all)")
+        p.add_argument("--runs", type=int, default=3, help="Runs per arm (default 3)")
+        if name == "run":
+            p.add_argument("--max-usd", type=float, required=True,
+                           help="Hard cap on spend for this whole command")
+            p.add_argument("--confirm", action="store_true",
+                           help="You've seen the estimate and agree to spend up to --max-usd")
+    p_ex.set_defaults(func=_cmd_experiment)
     return parser
 
 

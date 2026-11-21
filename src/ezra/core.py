@@ -212,12 +212,13 @@ def run_task(store: Store, gateway: Gateway, task_id: str,
              memory: str | None = None,
              learning: LearningConfig | None = None) -> RunOutcome:
     """Run Code Joe on a created task. `task_budget_usd` can only lower the cap for this run;
-    raising it is the user's decision (an approved HOLD). `memory` ("off" or "lessons")
-    overrides config/learning.yaml for this run."""
+    raising it is the user's decision (an approved HOLD). `memory` overrides
+    config/learning.yaml for this run: "off", "lessons" (use and learn) or "frozen" (use the
+    lessons as they are, learn nothing: the held-out phase of the experiment)."""
     learning = learning or load_learning()
     memory = memory or learning.memory
-    if memory not in ("off", "lessons"):
-        raise RunError(f"memory must be 'off' or 'lessons', not '{memory}'.")
+    if memory not in ("off", "lessons", "frozen"):
+        raise RunError(f"memory must be 'off', 'lessons' or 'frozen', not '{memory}'.")
     found = store.get_task(task_id)
     if found is None:
         raise RunError(f"No task '{task_id}'.")

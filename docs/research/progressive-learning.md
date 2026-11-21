@@ -255,6 +255,12 @@ skipped and logged, never HELD, because the task is already delivered.
    deterministic checks are the only gate for now.
 6. A failed or skipped reflection still marks the task as learned from; it isn't retried.
 
+**Experiment harness (draft, 2026-11-21):** `experiments/progressive-learning/` holds the fixture
+project, a starter set of 10 tasks with hidden tests and reference solutions, and a draft
+`PREREGISTRATION.md`. `src/ezra/experiment.py` runs the arms (`control`, `lessons`, `budget_matched`)
+with a hard spend cap; `ezra experiment validate | estimate | run | report`. A new memory mode,
+`frozen`, uses lessons without learning, for the held-out phase.
+
 ---
 
 ## Sources

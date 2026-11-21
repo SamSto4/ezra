@@ -43,7 +43,7 @@ This file brings a new agent up to speed on everything done so far. Read it firs
 - **Repo:** the local `Ezra A.I.` folder, on `main`. Public at https://github.com/SamSto4/ezra. Check `git log` and `git status` for what's pushed.
 - **Python 3.14** with `.venv` (`.venv/bin/python`, `.venv/bin/ezra`). Main packages: `anthropic` 2.11, `langgraph` 1.2.24, `langgraph-checkpoint-sqlite` 3.1.3, `pydantic` 2.14.
 - **API key:** stored in `~/.zshrc` as `ANTHROPIC_API_KEY`. The agent's Bash shell may not have it, so run live commands as `zsh -ic '.venv/bin/ezra …'`. Never print the key.
-- **Tests:** `.venv/bin/python -m pytest` gives **185 passed** (about 28s). Lint: `.venv/bin/ruff check .` is clean. Tests never touch the network; they use fake clients in `tests/fakes.py`.
+- **Tests:** `.venv/bin/python -m pytest` gives **190 passed** (about 32s). Lint: `.venv/bin/ruff check .` is clean. Tests never touch the network; they use fake clients in `tests/fakes.py`.
 - **Runtime data:** `.ezra/` (gitignored) holds `ezra.db` (SQLite), `checkpoints.db` (LangGraph state) and `worktrees/`.
 - **`playground/`:** a separate git repo, gitignored, containing a tiny `textkit` package. It's Code Joe's practice target.
 - **CLI:**
@@ -55,6 +55,7 @@ This file brings a new agent up to speed on everything done so far. Read it firs
   - `ezra trace <id> [-v] [--text <hash>]`: the full timeline, with models, tokens, cost, verdicts and (with `-v`) prompt versions and injected context. Free to read.
   - `ezra run <id> --resume` / `ezra abandon <id>`: continue a cut-off task, or close a stuck one (it keeps the branch).
   - `ezra review <id>`: Guardian review for a task packaged before review existed.
+  - `ezra ui`: the local web UI (M7) on http://127.0.0.1:8765. Build it once with `cd ui && npm install && npm run build`. See `docs/ui/ui-plan.md` §5.
 
 ## 4. Decisions (full text in `docs/decisions.md`)
 
@@ -77,7 +78,7 @@ This file brings a new agent up to speed on everything done so far. Read it firs
 | D-015 | Builder can't write `conftest.py` (at any depth) or the root `pyproject.toml`, `pytest.ini`, `setup.cfg` or `tox.ini` |
 | D-016 | Budget fit: before a HOLD, shrink the call's `max_tokens` to fit, and lower effort one step if it falls below half. HOLD only if it can't fit (under 25% of the request or under 1,024 tokens). **Never switch models to fit** |
 
-## 5. What's built (Phase 1, milestones M1–M6 done)
+## 5. What's built (Phase 1 done; Phase 2 M7 done)
 
 Details and live results are in `docs/phase-1-plan.md` §9.
 
@@ -109,6 +110,14 @@ Details and live results are in `docs/phase-1-plan.md` §9.
   - M5's flawed-output test went REVISE then PASS for $0.066. Guardian caught a missing docstring and a quietly changed word_count, even though every test had passed.
 
 - **M6:** trace viewer (`trace.py`), per-call attribution (prompt version, labelled context, and full texts in a local `texts` table), run leases plus resume and abandon, and `ezra review`. A real Ctrl-C found a resume bug: parallel steps that finished but weren't committed leave `next` empty. It's fixed (`core._resumable`). Both stranded tasks were reviewed and got PASS. **Baseline: about $0.075 per successful task.** Details are in `docs/phase-1-plan.md` §9.
+
+- **M7, UI v1 (Phase 2 start), done 2026-11-21:**
+  - **Local API:** FastAPI in `src/ezra/api.py`. It answers only on localhost, needs the `X-Ezra-Client` header on writes, and streams events live.
+  - **Roster and system view:** `src/ezra/roster.py`.
+  - **Web UI:** React and Vite in `ui/`, served by `ezra ui`.
+  - **Design:** the user's own **Volt** system (cobalt and lime, Space Grotesk and Inter), built from Awwwards references. The signature piece is the **Ezra orbit**. The brief is `docs/ui/awwwards-brief.md`.
+  - **Pages:** Home (ask box, cost per success, orbit), Agents, Tasks, a task page (pipeline line, counters, ledger trace, diff, reviews with their rule explained), Approvals (with an extension amount) and System (routing, prices, limits, verdict table, decisions).
+  - **Design tooling:** use the Awwwards MCP server for all UI and motion work. It's installed user-wide.
 
 ## 6. Research and the planned experiment
 

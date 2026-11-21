@@ -55,3 +55,43 @@ Rule: **a panel appears only when the department behind it exists.** Empty panel
 1. **The CLI is a thin client.** `ezra ask` / `ezra run` call functions in a core module. The CLI holds no logic of its own, so the UI can call the same functions later.
 2. **Every graph step writes start and finish events** with department, step, model, status and cost. The live Activity panel then becomes a query, not a rewrite.
 3. **A HOLD is a stored, pending approval record**, not just a terminal prompt. Any client can then answer it: CLI now, UI later.
+
+---
+
+## 5. Progress
+
+**M7, UI v1, done (2026-11-21).** Phase 2 starts here. 190 tests pass, ruff is clean, and the UI builds with strict TypeScript.
+
+- **Local API** (`src/ezra/api.py`, FastAPI): a thin layer over `ezra.core`, like the CLI.
+  - Reads: status (today's spend, limits, pending approvals, running jobs), tasks, a task with its full trace, stored texts, approvals, events, and a live **Server-Sent Events** stream.
+  - Actions: ask, run, resume, review, abandon, and answering a HOLD. Long actions run in a background thread; the UI follows them on the event stream.
+  - **Safety:** it listens on 127.0.0.1 only and refuses any Host that isn't localhost, which blocks DNS rebinding. Every write needs an `X-Ezra-Client` header, which other websites can't send without a CORS preflight, and this server allows no cross-origin requests. So a web page can't start tasks or approve spend.
+- **Web UI** (`ui/`, React and Vite, no other dependencies), in the mockup's look: dark navy, glass cards, the star mark and serif headings. The greeting has no personal name.
+  - **Home:** "Ask Ezra anything". A code request shows its acceptance criteria and a **Run with Code Joe** button.
+  - **Agent Activity (live):** each pipeline step as it happens, the model calls in flight, and spend.
+  - **Task page:** status and verdict, criteria ticked by Guardian's results, cost against the $2 budget with a per-operation bar chart, Guardian reviews (findings and corrections), and the **visual trace**. Click a call to see its prompt version and injected context, and open any stored text or reply. Buttons offer run, resume, review and abandon where they apply.
+  - **Tasks:** every task, plus the **cost per successful task**.
+  - **Approvals inbox:** HOLDs with Approve and Reject; answering one resumes the task.
+  - **Sidebar:** online status and today's spend against $10.
+  - Panels for Learner, Standards, Tools and the router stay out until those departments exist (section 1).
+- **Run it:** `cd ui && npm install && npm run build` once, then `ezra ui` and open http://127.0.0.1:8765. For UI development, `npm run dev` on :5173 forwards `/api` to `ezra ui`.
+- **Live check:** a request typed into the UI (`unique_words`, task `task_679a17c0987c`) went through intake, then **Run with Code Joe**. The activity panel followed every step live, and the task ended **PASS** for **$0.075**, which matches the baseline.
+- **Proven with tests only:** the approvals inbox answering a real HOLD. The API test covers a HOLD, then a rejection from the inbox, then the task stopping.
+
+**Agent-focused redesign (2026-11-21, design-engineer pass).** The look is still the mockup's (D-011).
+- **One color per agent, everywhere:** Intake blue, Code Joe violet, Builder green, Tester cyan, sandbox checks grey, Guardian amber. The same hue marks an agent in the pipeline, the trace, the live activity and the roster.
+- **Agents page** (`#/agents`, backed by `/api/agents` and `src/ezra/roster.py`):
+  - A flow diagram of how a coding request moves through the agents. An agent glows while it has a model call in flight.
+  - One card per agent: its role, model and effort per operation, current prompt version, calls, cost, cost per call, share of input read from cache, average time, and tasks.
+  - Each card also shows what the agent can and can't touch, and one agent-specific number. Guardian's is a verdict bar plus how many reviews Tier 1 settled for free.
+- **Task page:** a clickable **agent pipeline** (Intake → Plan → Build ∥ Write tests → pytest + ruff → Adjudicate → Review).
+  - Each node shows its state (done, working, failed, waiting or not needed) with its calls and cost.
+  - Clicking a node filters the trace to that agent's steps.
+  - Cost bars use the agent colors.
+- **Live activity:** names which agent is working right now, on which model.
+- **Checks run in the browser** (the skill's Python checker needs Playwright, which isn't installed here):
+  - No contrast failures on any page, and no horizontal overflow at 375, 768 or 1440 px.
+  - Every target is at least 24 px, the focus ring is visible, and reduced-motion and reduced-transparency fallbacks exist.
+  - On phones the sidebar becomes a top bar and the flow stacks vertically.
+
+**UI v2 (2026-11-21):** redesigned from Awwwards references. The direction, sources and rules are in [awwwards-brief.md](awwwards-brief.md).

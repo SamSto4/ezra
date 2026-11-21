@@ -461,6 +461,17 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_ui(args: argparse.Namespace) -> int:
+    from ezra.api import UI_DIST, serve
+    if not UI_DIST.is_dir():
+        print("The UI isn't built yet: run `npm install && npm run build` in ui/. "
+              "The API still runs.", file=sys.stderr)
+    print(f"Ezra UI on http://127.0.0.1:{args.port} (this Mac only). Ctrl-C to stop.",
+          file=sys.stderr)
+    serve(args.port)
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ezra", description="Ezra, your AI agent.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -477,6 +488,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_tr.add_argument("--text", metavar="SHA", default=None,
                       help="Print one stored prompt, context or reply by its hash")
     p_tr.set_defaults(func=_cmd_trace)
+    p_ui = sub.add_parser("ui", help="Open Ezra's local web UI")
+    p_ui.add_argument("--port", type=int, default=8765)
+    p_ui.set_defaults(func=_cmd_ui)
     p_apr = sub.add_parser("approvals", help="List decisions waiting for you")
     p_apr.set_defaults(func=_cmd_approvals)
     p_run = sub.add_parser("run", help="Have Code Joe work on a created task")

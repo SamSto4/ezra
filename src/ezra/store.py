@@ -207,6 +207,15 @@ class Store(metaclass=_ThreadSafe):
             return None
         return TaskEnvelope.model_validate_json(row["envelope"]), TaskStatus(row["status"])
 
+    def list_tasks(self, limit: int = 50) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """SELECT t.task_id, t.created_at, t.updated_at, t.status, t.description,
+                      COALESCE(SUM(COALESCE(i.actual_cost_usd, i.estimated_cost_usd, 0)), 0)
+                        AS spend_usd
+               FROM tasks t LEFT JOIN model_invocations i ON i.task_id = t.task_id
+               GROUP BY t.task_id ORDER BY t.created_at DESC LIMIT ?""", (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
     # -- model invocations -------------------------------------------------
 
     def record_invocation(self, inv: ModelInvocation) -> None:
@@ -229,6 +238,48 @@ class Store(metaclass=_ThreadSafe):
         return [ModelInvocation.model_validate_json(r["record"]) for r in rows]
 
     _COST = "COALESCE(actual_cost_usd, estimated_cost_usd, 0)"
+
+    def invocation_stats(self) -> list[dict[str, Any]]:
+        """Per operation: calls, failures, tokens, cost, latency, tasks touched, last call."""
+        rows = self.conn.execute(
+            f"""SELECT operation_id, COUNT(*) AS calls, SUM(1 - success) AS failures,
+                       SUM(input_tokens) AS input_tokens, SUM(output_tokens) AS output_tokens,
+                       SUM(cache_read_tokens) AS cache_read_tokens,
+                       SUM(cache_creation_tokens) AS cache_creation_tokens,
+                       SUM({self._COST}) AS cost_usd, SUM(latency_ms) AS latency_ms,
+                       COUNT(DISTINCT task_id) AS tasks, MAX(created_at) AS last_at
+                FROM model_invocations GROUP BY operation_id""").fetchall()
+        return [dict(r) for r in rows]
+
+    def cache_reads_by_model(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute("SELECT model_id, SUM(cache_read_tokens) AS cache_read_tokens "
+                                 "FROM model_invocations GROUP BY model_id").fetchall()
+        return [dict(r) for r in rows]
+
+    def prompt_versions(self) -> dict[str, list[str]]:
+        """Distinct prompt versions per operation, newest first (M6 attribution)."""
+        rows = self.conn.execute(
+            """SELECT operation_id, json_extract(record, '$.prompt_version') AS v,
+                      MAX(created_at) AS last FROM model_invocations
+               WHERE COALESCE(json_extract(record, '$.prompt_version'), '') != ''
+               GROUP BY operation_id, v ORDER BY last DESC""").fetchall()
+        out: dict[str, list[str]] = {}
+        for r in rows:
+            out.setdefault(r["operation_id"], []).append(r["v"])
+        return out
+
+    def review_counts(self) -> dict[str, int]:
+        """Guardian verdict counts, plus `_tier1`: reviews settled with no model call."""
+        out: dict[str, int] = {}
+        for r in self.conn.execute("SELECT verdict, tier FROM guardian_reviews").fetchall():
+            out[r["verdict"]] = out.get(r["verdict"], 0) + 1
+            if r["tier"] == "tier1_deterministic":
+                out["_tier1"] = out.get("_tier1", 0) + 1
+        return out
+
+    def event_counts(self) -> dict[str, int]:
+        rows = self.conn.execute("SELECT kind, COUNT(*) AS n FROM events GROUP BY kind")
+        return {r["kind"]: r["n"] for r in rows.fetchall()}
 
     def spend_for_task(self, task_id: str) -> float:
         row = self.conn.execute(
@@ -332,6 +383,22 @@ class Store(metaclass=_ThreadSafe):
             "SELECT created_at, kind, data FROM events WHERE task_id IS ? ORDER BY id", (task_id,)
         ).fetchall()
         return [{"at": r["created_at"], "kind": r["kind"], **json.loads(r["data"])} for r in rows]
+
+    def last_event_id(self) -> int:
+        row = self.conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM events").fetchone()
+        return int(row["m"])
+
+    def events_after(self, last_id: int, task_id: str | None = None,
+                     limit: int = 200) -> list[dict[str, Any]]:
+        """Events with id > last_id, oldest first: what a live view hasn't seen yet."""
+        sql = "SELECT id, task_id, created_at, kind, data FROM events WHERE id > ?"
+        args: list[Any] = [last_id]
+        if task_id is not None:
+            sql += " AND task_id = ?"
+            args.append(task_id)
+        rows = self.conn.execute(sql + " ORDER BY id LIMIT ?", (*args, limit)).fetchall()
+        return [{"id": r["id"], "task_id": r["task_id"], "at": r["created_at"],
+                 "kind": r["kind"], "data": json.loads(r["data"])} for r in rows]
 
     # -- approval records (D-009, D-011) -------------------------------------
 

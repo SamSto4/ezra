@@ -144,11 +144,34 @@ def _print_outcome(out: core.RunOutcome) -> int:
         print(f"  finding [{f.severity}] {f.code}: {f.message[:120]}")
     if rev.summary:
         print(f"Guardian: {rev.summary[:300]}")
+    _print_learning(out.learning)
     if out.outcome == "passed":
         print(f"Nothing was merged. Merging {r.branch} is your call.")
         return EXIT_OK
     print("Escalated to you: Ezra won't try again on its own.")
     return EXIT_ERROR
+
+
+def _print_learning(learn) -> None:
+    if learn is None:
+        return
+    parts = []
+    if learn.added:
+        parts.append(f"{len(learn.added)} new lesson(s) ({', '.join(learn.added)})")
+    if learn.merged:
+        parts.append(f"{len(learn.merged)} reinforced")
+    if learn.retired:
+        parts.append(f"{len(learn.retired)} retired")
+    if learn.rejected:
+        parts.append(f"{len(learn.rejected)} rejected by the checks")
+    if learn.rated:
+        parts.append(f"{len(learn.rated)} rated")
+    summary = "; ".join(parts) or "nothing new"
+    cost = f" (${learn.cost_usd:.4f})" if learn.reflected else ""
+    print(f"Learned: {summary}{cost}." + (f" {learn.skipped}." if learn.skipped else ""))
+    if learn.added:
+        print("  New lessons are live now. See them with: ezra lessons; undo one with: "
+              "ezra lessons retire <id>")
 
 
 def _run_guarded(fn, task_id: str | None = None) -> int:
@@ -180,8 +203,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
             store, gw, args.task_id, on_step=_step), args.task_id)
     print(f"Code Joe is working on {args.task_id}…", file=sys.stderr)
     return _run_guarded(lambda store, gw: core.run_task(
-        store, gw, args.task_id, task_budget_usd=args.task_budget, on_step=_step),
-        args.task_id)
+        store, gw, args.task_id, task_budget_usd=args.task_budget, on_step=_step,
+        memory=args.memory), args.task_id)
 
 
 def _cmd_review(args: argparse.Namespace) -> int:
@@ -317,6 +340,64 @@ def _cmd_bench(args: argparse.Namespace) -> int:
     return EXIT_OK if s.passed else EXIT_ERROR
 
 
+def _cmd_learn(args: argparse.Namespace) -> int:
+    store = core.open_store()
+    try:
+        learn = core.learn(store, core.open_gateway(store), args.task_id)
+    except MissingCredentials as e:
+        print(str(e), file=sys.stderr)
+        return EXIT_ERROR
+    finally:
+        store.close()
+    if learn.skipped and not (learn.reflected or learn.rated):
+        print(f"Nothing learned: {learn.skipped}.")
+        return EXIT_OK
+    _print_learning(learn)
+    return EXIT_OK
+
+
+def _lesson_line(lsn) -> str:
+    scope = lsn.project or "any project"
+    return (f"{lsn.lesson_id}  [{lsn.status} · {lsn.source} · {lsn.kind}]  {lsn.operation} · "
+            f"{scope} · +{lsn.helpful}/-{lsn.harmful} · used {lsn.uses} · "
+            f"seen in {len(lsn.evidence)} task(s) · v{lsn.version}\n"
+            f"    When {lsn.trigger.rstrip('.')}: {lsn.text}")
+
+
+def _cmd_lessons(args: argparse.Namespace) -> int:
+    store = core.open_store()
+    try:
+        if args.action == "show":
+            found = core.lesson_history(store, args.lesson_id)
+            if found is None:
+                print(f"No lesson '{args.lesson_id}'.", file=sys.stderr)
+                return EXIT_ERROR
+            lesson, history = found
+            print(_lesson_line(lesson))
+            print("Evidence: " + ", ".join(lesson.evidence))
+            for h in history:
+                print(f"  v{h['version']}  {h['created_at'][:19]}Z  {h['action']}"
+                      + (f"  ({h['task_id']})" if h["task_id"] else "")
+                      + (f"  {h['reason'][:120]}" if h["reason"] else ""))
+            return EXIT_OK
+        if args.action == "retire":
+            try:
+                lesson = core.retire_lesson(store, args.lesson_id)
+            except core.RunError as e:
+                print(str(e), file=sys.stderr)
+                return EXIT_ERROR
+            print(f"Retired {lesson.lesson_id}. It stays in the history but won't be used.")
+            return EXIT_OK
+        lessons = core.list_lessons(store, include_retired=args.all)
+    finally:
+        store.close()
+    if not lessons:
+        print("No lessons yet. Run a task with --memory lessons to start learning.")
+    for lsn in lessons:
+        print(_lesson_line(lsn))
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ezra", description="Ezra, your AI agent.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -341,6 +422,8 @@ def build_parser() -> argparse.ArgumentParser:
                        help="Lower the task's budget cap for this run (USD)")
     p_run.add_argument("--resume", action="store_true",
                        help="Continue a task that was cut off (crash or Ctrl-C)")
+    p_run.add_argument("--memory", choices=["off", "lessons"], default=None,
+                       help="Use and learn lessons this run (default: config/learning.yaml)")
     p_run.set_defaults(func=_cmd_run)
     p_rv = sub.add_parser("review", help="Give Guardian review to a task that never got one")
     p_rv.add_argument("task_id")
@@ -363,6 +446,19 @@ def build_parser() -> argparse.ArgumentParser:
                      help="what the file is; 'references' self-checks docs/reference-outputs")
     p_b.add_argument("path", nargs="?", help="file to score, or - for stdin")
     p_b.set_defaults(func=_cmd_bench)
+    p_learn = sub.add_parser("learn", help="Learn lessons from a finished task")
+    p_learn.add_argument("task_id")
+    p_learn.set_defaults(func=_cmd_learn)
+    p_les = sub.add_parser("lessons", help="List, inspect or retire learned lessons")
+    p_les.set_defaults(func=_cmd_lessons, action="list")
+    les_sub = p_les.add_subparsers(dest="action")
+    p_list = les_sub.add_parser("list", help="List lessons (default)")
+    p_list.add_argument("--all", action="store_true", help="Include retired lessons")
+    p_show = les_sub.add_parser("show", help="A lesson and its version history")
+    p_show.add_argument("lesson_id")
+    p_ret = les_sub.add_parser("retire", help="Stop using a lesson (kept in history)")
+    p_ret.add_argument("lesson_id")
+    p_les.add_argument("--all", action="store_true", help="Include retired lessons")
     return parser
 
 

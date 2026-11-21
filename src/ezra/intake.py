@@ -244,9 +244,26 @@ def problems_with(decision: IntakeDecision) -> list[str]:
     return found
 
 
+def system_prompt(with_example: bool = False) -> str:
+    """The intake system prompt; optionally with the best Acceptance Criteria example appended.
+
+    The example variant is only for the intake A/B experiment (docs/benchmarks.md, item 6),
+    never the default. Both variants are static, so both cache.
+    """
+    if not with_example:
+        return SYSTEM_PROMPT
+    # Imported here because ezra.benchmarks imports this module.
+    from ezra.benchmarks.reference import example
+    best = example("acceptance-criteria/best").body
+    return (f"{SYSTEM_PROMPT}\n## Example of a best answer\n\nRequest: \"Add a word_count "
+            "function to textkit that counts the words in a string.\"\n\n"
+            f"{best}\n\nMatch its shape: few criteria, each an exact call and result.\n")
+
+
 def run_intake(gateway: Gateway, request: str, *, project: Path, limits: Limits,
-               request_id: str | None = None) -> IntakeResult:
+               request_id: str | None = None, with_example: bool = False) -> IntakeResult:
     request_id = request_id or new_id("task")
+    system = system_prompt(with_example)
     summary = project_summary(project)
     user_msg = f"{summary}\n\n## Request\n\n{request}"
     messages: list[dict] = [{"role": "user", "content": user_msg}]
@@ -254,7 +271,7 @@ def run_intake(gateway: Gateway, request: str, *, project: Path, limits: Limits,
 
     for attempt in range(MAX_REPAIRS + 1):
         resp = gateway.call(operation=OPERATION, department=Department.EZRA,
-                            system=SYSTEM_PROMPT, messages=messages, max_tokens=MAX_TOKENS,
+                            system=system, messages=messages, max_tokens=MAX_TOKENS,
                             task_id=request_id,
                             context=[("project_summary", summary), ("request", request)],
                             output_format={"type": "json_schema", "schema": SCHEMA})
@@ -298,13 +315,17 @@ def run_intake(gateway: Gateway, request: str, *, project: Path, limits: Limits,
             budget=Budget(task_limit_usd=limits.task_budget_usd,
                           daily_limit_usd=limits.daily_budget_usd))
         gateway.store.save_task(result.envelope)
+    # Benchmark against docs/reference-outputs/ (criteria for code, the answer checks for
+    # direct answers). Logged only: no repair, no extra model call, so it costs nothing and
+    # changes no behaviour. Imported here because ezra.benchmarks imports this module.
+    from ezra.benchmarks.scorers import score_answer, score_intake_decision
+    bench = None
     if decision.route is Route.CODE:
-        # Benchmark against docs/reference-outputs/acceptance-criteria.md. Logged only: no
-        # repair, no extra model call, so it costs nothing and changes no behaviour.
-        # Imported here because ezra.benchmarks imports this module.
-        from ezra.benchmarks.scorers import score_intake_decision
         bench = score_intake_decision(decision)
-        gateway.store.log_event(request_id, "intake_benchmark",
+    elif decision.route is Route.DIRECT:
+        bench = score_answer(decision.answer)
+    if bench is not None:
+        gateway.store.log_event(request_id, "intake_benchmark", scored=bench.kind,
                                 benchmark_version=bench.benchmark_version,
                                 warnings=bench.warnings, metrics=bench.metrics)
     gateway.store.log_event(request_id, "intake_routed", route=str(decision.route),

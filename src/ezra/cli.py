@@ -461,6 +461,58 @@ def _cmd_experiment(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _cmd_intake_ab(args: argparse.Namespace) -> int:
+    import tempfile
+    from pathlib import Path
+
+    from ezra import experiment as ex
+    from ezra.benchmarks import intake_ab as ab
+    if args.action == "report":
+        summary = ab.summarize(ab.load_rows())
+        if not summary:
+            print("No results yet.")
+            return EXIT_OK
+        for arm, s in summary.items():
+            crit = (f"criteria {s['mean_criteria']:.1f} ({s['mean_model_criteria']:.1f} "
+                    f"besides free checks), warnings {s['mean_warnings']:.1f}"
+                    if s["code_routes"] else "no code routes")
+            print(f"{arm:8} calls={s['calls']} runs={s['runs']} errors={s['errors']}  "
+                  f"repairs {s['repair_rate']:.0%}  {crit}  output tokens "
+                  f"{s['mean_output_tokens']:.0f}  ${s['mean_cost_usd']:.4f}/call  "
+                  f"total ${s['total_cost_usd']:.4f}")
+        return EXIT_OK
+    requests = [(t.id, t.description) for t in ex.load_tasks()]
+    arms = list(ab.ARMS)
+    calls, usd = ab.estimate(len(requests), arms, args.runs)
+    print(f"{len(requests)} requests x {len(arms)} arms x {args.runs} run(s) = {calls} intake "
+          f"calls: about ${usd:.2f} (no coding tasks run).")
+    if args.action == "estimate":
+        return EXIT_OK
+    if not args.confirm:
+        print("Nothing was run. Live runs spend money: add --max-usd and --confirm once "
+              "you've agreed to the cost.")
+        return EXIT_HOLD
+    spent = 0.0
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            project = ex.make_project(ex.EXPERIMENT_DIR / "fixture", Path(tmp) / "fixture")
+            for run in range(1, args.runs + 1):
+                for arm in arms:
+                    print(f"Running {arm}, run {run}…", file=sys.stderr)
+                    rows = ab.run_arm(arm, run, requests, project, args.max_usd - spent,
+                                      on_row=lambda r: print(
+                                          f"  {r.task}: {r.route}, {r.criteria} criteria, "
+                                          f"{r.repairs} repair(s), ${r.cost_usd:.4f}"
+                                          + (f", ERROR {r.error}" if r.error else ""),
+                                          file=sys.stderr))
+                    spent += sum(r.cost_usd for r in rows)
+    except (core.RunError, MissingCredentials) as e:
+        print(str(e), file=sys.stderr)
+        return EXIT_ERROR
+    print(f"Done, spent ${spent:.4f}. See the results with: ezra intake-ab report")
+    return EXIT_OK
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ezra", description="Ezra, your AI agent.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -539,6 +591,19 @@ def build_parser() -> argparse.ArgumentParser:
             p.add_argument("--confirm", action="store_true",
                            help="You've seen the estimate and agree to spend up to --max-usd")
     p_ex.set_defaults(func=_cmd_experiment)
+    p_ab = sub.add_parser("intake-ab", help="Intake with vs without the best criteria example")
+    ab_sub = p_ab.add_subparsers(dest="action", required=True)
+    ab_sub.add_parser("report", help="Summarize the results so far")
+    for name, text in (("estimate", "Estimate the cost (no model calls)"),
+                       ("run", "Run both arms live (spends money; needs --confirm)")):
+        p = ab_sub.add_parser(name, help=text)
+        p.add_argument("--runs", type=int, default=3, help="Runs per arm (default 3)")
+        if name == "run":
+            p.add_argument("--max-usd", type=float, required=True,
+                           help="Hard cap on spend for this whole command")
+            p.add_argument("--confirm", action="store_true",
+                           help="You've seen the estimate and agree to spend up to --max-usd")
+    p_ab.set_defaults(func=_cmd_intake_ab)
     return parser
 
 

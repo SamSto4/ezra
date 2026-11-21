@@ -220,13 +220,16 @@ def test_gateway_sends_context_as_a_second_cached_block_and_logs_its_ids(store):
                  pricing=load_pricing(), client=client)
     resp = gw.call(operation="builder.implement", department=Department.BUILDER,
                    system="static", messages=[{"role": "user", "content": "hi"}],
-                   max_tokens=100, context="## Lessons\n- one", context_refs=["les_1"])
+                   max_tokens=100, system_context="## Lessons\n- one",
+                   context_refs=["les_1"])
     sent = client.messages.stream_calls[0]["system"]
     counted = client.messages.count_calls[0]["system"]
     assert [b["text"] for b in sent] == ["static", "## Lessons\n- one"]
     assert all(b["cache_control"] == {"type": "ephemeral"} for b in sent)
     assert counted == sent  # the budget check counts the lessons too
     assert resp.invocation.context_refs == ["les_1"]
+    # M6 attribution records the lesson block as a labelled context piece.
+    assert [c.label for c in resp.invocation.context] == ["lessons"]
 
 
 # -- end to end ------------------------------------------------------------------------------

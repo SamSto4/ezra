@@ -402,8 +402,37 @@ def answer_hold(store: Store, gateway: Gateway, approval_id: str, approved: bool
         conn.close()
 
 
-        with _lease(store, approval.task_id):
-            _drive(app, Command(resume={match[0].id: {"approved": approved,
-                                                      "extend_usd": extend}}), cfg, on_step)
-        return _learn_if_finished(store, gateway, _outcome(store, app, cfg, approval.task_id),
-                                  learning)
+# -- Trace (M6) ------------------------------------------------------------------------
+
+
+def get_trace(store: Store, task_id: str) -> Trace | None:
+    """Everything that happened to a task, from the store alone (no model calls)."""
+    return build_trace(store, task_id)
+
+
+# -- lessons: progressive learning (D-012) -----------------------------------------------
+
+
+def learn(store: Store, gateway: Gateway, task_id: str,
+          learning: LearningConfig | None = None) -> LearnOutcome:
+    """Learn from a finished task by hand (for tasks run with memory off, for example)."""
+    return learn_from_task(store, gateway, task_id, learning or load_learning())
+
+
+def list_lessons(store: Store, include_retired: bool = False) -> list[Lesson]:
+    return store.lessons(None if include_retired else LessonStatus.ACTIVE)
+
+
+def lesson_history(store: Store, lesson_id: str) -> tuple[Lesson, list[dict[str, Any]]] | None:
+    lesson = store.get_lesson(lesson_id)
+    return (lesson, store.lesson_history(lesson_id)) if lesson else None
+
+
+def retire_lesson(store: Store, lesson_id: str, reason: str = "retired by you") -> Lesson:
+    """The one-step rollback for an inferred lesson (D-009 Level 2)."""
+    lesson = store.get_lesson(lesson_id)
+    if lesson is None:
+        raise RunError(f"No lesson '{lesson_id}'.")
+    if lesson.status is LessonStatus.RETIRED:
+        raise RunError(f"Lesson {lesson_id} is already retired.")
+    return retire(store, lesson, reason)

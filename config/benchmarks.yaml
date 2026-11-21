@@ -1,0 +1,58 @@
+# Benchmark checks: the deterministic part of judging an output against
+# docs/reference-outputs/ (D-001). Read by ezra.benchmarks.
+#
+# Two kinds of result:
+#   gates    - hard rules taken from existing contracts and decisions (intake's problems_with,
+#              the Standards template, D-006, D-014, pricing.yaml arithmetic). A gate failure
+#              means the output is broken.
+#   warnings - the reference files' checklists turned into cheap text checks. They never block
+#              anything; they're logged so we can see how often agents miss the checklist.
+#
+# Every value marked GUESS is a first-version heuristic, not a measured threshold.
+# Revisit them once real outputs have been scored (M6 traces make that possible).
+# Changing this file doesn't change any verdict: nothing here feeds the D-002 table.
+version: "1"
+
+acceptance_criteria:
+  # Reference checklist says 3-6; intake's hard rule (problems_with) stays 2-8.
+  min_criteria: 3
+  max_criteria: 6
+  max_title_chars: 60
+  max_description_sentences: 3
+  # GUESS: words that make a criterion untestable (turn into cannot_verify under D-002).
+  vague_phrases:
+    - works correctly
+    - correctly handles
+    - gracefully
+    - best practices
+    - robust
+    - clean code
+    - comprehensive
+    - efficiently
+    - as expected
+    - properly
+    - well documented
+
+standards:
+  # Sections every Standard needs to be ruled on. The template's other sections are warnings.
+  required_sections: [Requirement, Rationale, Passing conditions, Failure conditions]
+  # GUESS: phrases that push outputs longer without a measurable gain.
+  length_phrases: [in detail, comprehensive, thorough, at all times, as much as possible]
+  # GUESS: a Requirement over this many sentences is probably more than one requirement.
+  max_requirement_sentences: 1
+
+answers:
+  # Only the cheap, deterministic part of the Quality Rubric (F Clarity, G Presentation).
+  # Accuracy, task achievement and reasoning need Guardian's judgement (Tier 3).
+  # GUESS: phrase lists, taken from the weak reference answer.
+  preamble_phrases: ["great question", "let's walk through", "don't worry", "i'd be happy to",
+                     "happy to help", "certainly!"]
+  signoff_phrases: ["i hope this helps", "hope this helps", "let me know if", "feel free to",
+                    "happy coding"]
+  # GUESS: an answer shorter than this many words shouldn't need markdown headings.
+  short_answer_words: 300
+
+model_evals:
+  min_runs_for_spread: 3   # D-012
+  cost_tolerance_usd: 0.00001
+  statuses: [candidate, evaluating, qualified, rejected, retired]

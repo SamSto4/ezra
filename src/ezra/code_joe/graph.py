@@ -66,6 +66,7 @@ from ezra.gateway import BudgetHold, Gateway, GatewayError, ModelRefusal
 from ezra.guardian.tier1 import criterion_pattern, is_acceptance_case, run_tier1
 from ezra.guardian.tier2 import run_tier2
 from ezra.guardian.verdict import VerdictInput, build_review
+from ezra.learner.retrieval import LessonProvider
 from ezra.store import Store
 
 
@@ -91,6 +92,7 @@ class CodeJoeState(TypedDict, total=False):
     outcome: str
     result: dict
     review: dict
+    memory: str  # "off" or "lessons" (config/learning.yaml), fixed for the whole run
 
 
 @dataclass
@@ -99,6 +101,7 @@ class Context:
     gateway: Gateway
     worktrees_dir: Path
     test_timeout: int
+    lessons: LessonProvider | None = None  # progressive learning (D-012)
 
 
 class Stopped(Exception):
@@ -148,6 +151,13 @@ class _Gate:
         return {"budget_extra_task": self.added_task, "budget_extra_day": self.added_day}
 
     def call(self, **kwargs: Any) -> Any:
+        if self.ctx.lessons is not None and self.state.get("memory") == "lessons":
+            # Lessons ride as a second cached system block. They're counted in the input,
+            # so the budget check, fit and HOLD below cover them like any other token.
+            context, refs = self.ctx.lessons.for_call(self.state["task_id"],
+                                                      kwargs["operation"])
+            if context:
+                kwargs = {**kwargs, "system_context": context, "context_refs": refs}
         while True:
             if self.rejected:
                 raise Stopped(self.rejected)

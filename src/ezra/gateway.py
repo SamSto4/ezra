@@ -113,7 +113,9 @@ class Gateway:
              task_budget_usd: float | None = None, daily_budget_usd: float | None = None,
              approval_id: str | None = None, persist_hold: bool = True,
              prompt_name: str | None = None,
-             context: list[tuple[str, str]] | None = None) -> GatewayResponse:
+             context: list[tuple[str, str]] | None = None,
+             system_context: str | None = None,
+             context_refs: list[str] | None = None) -> GatewayResponse:
         """One model call. Optional knobs:
         - tools: client tools for an agent loop (the caller runs them).
         - cache_conversation: also cache the conversation so far, for loops whose history
@@ -123,7 +125,11 @@ class Gateway:
           step that may rerun passes a stable id and saves the approval itself.
         - prompt_name / context: attribution. The prompt name defaults to the operation; the
           version adds a fingerprint of the system prompt, so a wording change shows up.
-          context is (label, text) pairs for what the caller injected into the message."""
+          context is (label, text) pairs for what the caller injected into the message.
+        - system_context / context_refs: extra system text (retrieved lessons, D-012) sent as
+          a second cached block after the static prompt, and the lesson ids it came from,
+          logged on the invocation. It's part of the counted input, so the budget check,
+          fit and HOLD cover it, and it's attributed as context labelled "lessons"."""
         route = self.routing.route(operation)
         output_config: dict[str, Any] = {"effort": route.effort}
         if output_format is not None:
@@ -131,6 +137,10 @@ class Gateway:
         # Static system prompt marked for caching. Prompts under the model's minimum
         # (512 tokens) simply don't cache; that costs nothing extra.
         system_blocks = [{"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}]
+        if system_context:
+            # Its own breakpoint: the static prompt still caches when the lessons change.
+            system_blocks.append({"type": "text", "text": system_context,
+                                  "cache_control": {"type": "ephemeral"}})
         shared = dict(model=route.model, system=system_blocks, messages=messages,
                       thinking={"type": "adaptive"}, output_config=output_config,
                       betas=[FALLBACK_BETA])
@@ -157,8 +167,12 @@ class Gateway:
                                  requested_max_tokens=requested, max_tokens=max_tokens,
                                  effort=output_config["effort"], worst_case_usd=round(worst, 6))
         try:
+            pieces = list(context or [])
+            if system_context:
+                pieces.append(("lessons", system_context))
             attribution = self._attribution(prompt_name or operation, system, messages,
-                                            context)
+                                            pieces)
+            attribution["context_refs"] = list(context_refs or [])
             return self._call_reserved(shared, route, operation, department, task_id,
                                        input_tokens, max_tokens, worst, attribution)
         finally:

@@ -1,0 +1,26 @@
+id: l05_fix_truncate
+category: bug_fix
+split: learn
+description: truncate in minitext can return text longer than width when it adds "...". Fix it so the
+  result is never longer than width.
+criteria:
+- id: AC1
+  text: When text is cut, the result ends with "..." and is at most width characters long, including the
+    dots
+  severity: critical
+  verification: test
+- id: AC2
+  text: Text that already fits is returned unchanged
+  severity: major
+  verification: test
+- id: AC3
+  text: If width is smaller than 3, the text is cut to width characters without dots
+  severity: minor
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

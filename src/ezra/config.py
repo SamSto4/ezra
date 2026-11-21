@@ -53,7 +53,7 @@ class LearningConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     version: str = "lessons-v1"
-    memory: Literal["off", "lessons"] = "off"
+    memory: Literal["off", "lessons", "frozen"] = "off"
     inject_into: list[str] = Field(default_factory=lambda: [
         "code_joe.plan", "builder.implement", "tester.write_tests"])
     retrieval_token_cap: int = Field(default=700, ge=0)

@@ -1,0 +1,26 @@
+id: l01_char_frequency
+category: new_function
+split: learn
+description: 'Add char_frequency(text) to minitext: count how often each letter appears, ignoring case
+  and anything that isn''t a letter.'
+criteria:
+- id: AC1
+  text: char_frequency(text) is importable from minitext and returns a dict mapping lowercase letters
+    to counts
+  severity: critical
+  verification: test
+- id: AC2
+  text: Uppercase and lowercase letters are counted together under the lowercase key
+  severity: major
+  verification: test
+- id: AC3
+  text: Digits, spaces and punctuation are not counted; an empty string gives an empty dict
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies

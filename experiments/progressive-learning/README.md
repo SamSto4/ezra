@@ -1,0 +1,31 @@
+# Progressive learning experiment
+
+Does Ezra learn from experience in a way that pays for itself? See `PREREGISTRATION.md` for the
+design, and `docs/research/progressive-learning.md` §5 for the reasoning behind it.
+
+| Path | What |
+|---|---|
+| `fixture/` | `minitext`, the small project every task starts from (a fresh git copy each time) |
+| `tasks/<id>/task.yaml` | What Ezra is told: description, Acceptance Criteria, constraints, split, category |
+| `tasks/<id>/hidden/` | Tests Ezra never sees; they decide true success |
+| `tasks/<id>/reference/` | A known-good solution, used only to prove the task is fair |
+
+```
+ezra experiment validate                 # every task fair? (no model calls)
+ezra experiment estimate --runs 3        # what a run would cost (no model calls)
+ezra experiment run --arms control,lessons --runs 1 --max-usd 3 --confirm   # live: spends money
+ezra experiment report                   # success, cost per success, paired difference with 95% CI
+```
+
+Results go to `.ezra/experiments/progressive-learning/` (gitignored): one database per arm and run,
+plus `results.jsonl`. Scrub them before publishing anything.
+
+## Adding a task
+
+1. Make `tasks/<id>/` with a `task.yaml` like the others. Use the `learn` or `heldout` split
+   according to the category rule in the pre-registration.
+2. Write the hidden tests to go a little beyond the criteria, the way a careful user would check
+   the work, without testing anything the criteria don't imply. Never put a criterion id in them.
+3. Put the full changed files of a correct solution under `reference/`, at the same paths as in
+   the fixture.
+4. Run `ezra experiment validate`.

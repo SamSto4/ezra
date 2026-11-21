@@ -1,0 +1,25 @@
+id: h01_title_case_edges
+category: edge_case
+split: heldout
+description: title_case in minitext crashes on empty text and on repeated spaces. Make it handle those,
+  keeping the original spacing.
+criteria:
+- id: AC1
+  text: title_case of an empty string returns an empty string
+  severity: critical
+  verification: test
+- id: AC2
+  text: Repeated, leading and trailing spaces are kept exactly as they were; only first letters change
+  severity: major
+  verification: test
+- id: AC3
+  text: Normal sentences still work as before
+  severity: major
+  verification: test
+- id: AC9
+  text: All existing tests in tests/ still pass
+  severity: major
+  verification: deterministic
+  check: tests_pass
+constraints:
+- No new dependencies
